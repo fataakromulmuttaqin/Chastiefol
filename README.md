@@ -527,13 +527,13 @@ docker run -d --env-file .env -p 8080:8080 chastiefol
 - [x] Pine Script Strategy (PSAR + EMA)
 - [x] Backtester (Walk-Forward + Monte Carlo)
 - [x] Dashboard (HTML/Chart.js)
-- [ ] Docker containerization
-- [ ] Multi-timeframe analysis
-- [ ] Portfolio mode (multi-pair)
-- [ ] Web dashboard (React)
-- [ ] Database persistence (PostgreSQL)
-- [ ] Automated daily reports
-- [ ] Strategy optimizer (genetic algorithm)
+- [x] Docker containerization
+- [x] Multi-timeframe analysis
+- [x] Portfolio mode (multi-pair)
+- [x] Web dashboard (React)
+- [x] Database persistence (PostgreSQL)
+- [x] Automated daily reports
+- [x] Strategy optimizer (genetic algorithm)
 
 ---
 
