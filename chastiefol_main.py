@@ -527,26 +527,39 @@ class ChastiefollIntegrated:
             log.info(f"Signal found but confidence too low: {setup.confidence*100:.0f}%")
             return
 
-        # ── Verify price from FIX fallback before executing ──
-        # If all data providers failed, entry price may be stale/wrong.
-        # Use FIX market data as authoritative fallback to validate.
-        verified_entry = await self._verify_entry_price(setup.entry)
-        if verified_entry == 0.0:
-            log.warning("Cannot verify entry price — all price sources unavailable.")
-            return
+        # ── VALIDATE setup.entry AGAINST LIVE FIX PRICE ──
+        # setup.entry comes from df["close"].iloc[-1] which may be from stale/synthetic data.
+        # We must validate it against the live broker price before proceeding.
+        live_price = await self._get_current_price()
+        if live_price > 0:
+            entry_deviation = abs(setup.entry - live_price) / live_price
+            if entry_deviation > 0.01:  # > 1% deviation
+                log.warning(
+                    f"Setup entry ${setup.entry:.2f} deviates {entry_deviation*100:.1f}% "
+                    f"from live price ${live_price:.2f} — replacing with live price"
+                )
+                # Recalculate SL/TP relative to live price (preserve distance)
+                sl_distance = abs(setup.entry - setup.stop_loss)
+                tp_distance = abs(setup.entry - setup.take_profit)
 
-        if verified_entry != setup.entry:
-            log.warning(f"[PRICE] Entry price corrected: ${setup.entry:.2f} → ${verified_entry:.2f} (FIX fallback)")
-            setup.entry = verified_entry
-            # Recalculate SL/TP relative to verified entry
-            sl_distance = abs(verified_entry - setup.stop_loss)
-            if setup.signal == Signal.BUY:
-                setup.stop_loss = round(verified_entry - sl_distance, 2)
-                setup.take_profit = round(verified_entry + sl_distance * setup.rr_ratio, 2)
-            else:
-                setup.stop_loss = round(verified_entry + sl_distance, 2)
-                setup.take_profit = round(verified_entry - sl_distance * setup.rr_ratio, 2)
-            setup.rr_ratio = round(abs(setup.take_profit - verified_entry) / abs(setup.stop_loss - verified_entry), 2)
+                setup.entry = live_price
+                if setup.signal == Signal.BUY:
+                    setup.stop_loss = live_price - sl_distance
+                    setup.take_profit = live_price + tp_distance
+                else:
+                    setup.stop_loss = live_price + sl_distance
+                    setup.take_profit = live_price - tp_distance
+
+                log.info(f"  Adjusted: Entry=${setup.entry:.2f} SL=${setup.stop_loss:.2f} "
+                         f"TP=${setup.take_profit:.2f}")
+        elif not self.config.paper_mode:
+            # Cannot get live price in live mode — skip this signal
+            log.error("Cannot validate setup.entry — no live price available. Skipping signal.")
+            await self._notify_error(
+                "Signal skipped: no live price to validate entry",
+                context=f"{setup.signal.value} entry=${setup.entry:.2f}"
+            )
+            return
 
         # Position size
         pos_spec = self.position_sizer.calculate(
@@ -602,7 +615,41 @@ class ChastiefollIntegrated:
         take_profit: float,
         comment: str = "Chastiefol",
     ):
-        """Execute order via configured method (MCP, FIX, or Paper)."""
+        """Execute order via configured method (MCP, FIX, or Paper).
+        
+        Includes price sanity check: if the entry price deviates more than 1%
+        from the live FIX price, the order is rejected to prevent executing
+        at stale/synthetic prices.
+        """
+        # ── PRICE SANITY CHECK ──
+        # Validate entry against live FIX price to catch stale/synthetic data
+        live_price = self._get_fix_price()
+        if live_price > 0 and entry > 0:
+            deviation = abs(entry - live_price) / live_price
+            if deviation > 0.01:  # > 1% deviation
+                log.error(
+                    f"PRICE SANITY FAILED: entry=${entry:.2f} vs FIX live=${live_price:.2f} "
+                    f"(deviation={deviation*100:.1f}% > 1% threshold). "
+                    f"Order REJECTED to prevent bad fill."
+                )
+                await self._notify_error(
+                    f"Order rejected — price mismatch!\n"
+                    f"Signal entry: ${entry:.2f}\n"
+                    f"Live FIX price: ${live_price:.2f}\n"
+                    f"Deviation: {deviation*100:.1f}%\n"
+                    f"Threshold: 1%",
+                    context=f"{side.value} {volume} lots"
+                )
+                return
+            # Use live price instead of potentially stale entry
+            if deviation > 0.001:  # > 0.1% — use live price for better accuracy
+                log.info(f"Adjusting entry from ${entry:.2f} to live FIX price ${live_price:.2f} "
+                         f"(deviation={deviation*100:.2f}%)")
+                entry = live_price
+        elif live_price == 0 and not self.config.paper_mode:
+            # No FIX price available in live mode — warn but continue
+            log.warning("FIX price unavailable for sanity check — proceeding with caution")
+
         log.info(f"Executing: {side.value} {volume} lots @ ~{entry:.2f} "
                  f"SL={stop_loss:.2f} TP={take_profit:.2f}")
 
@@ -848,25 +895,61 @@ class ChastiefollIntegrated:
         return self._synthetic_data()
 
     async def _get_current_price(self) -> float:
-        """Get current market price."""
+        """
+        Get current market price with FIX as PRIMARY fallback.
+        
+        Priority:
+          1. FIX price connection (_latest_quotes) — always live from broker
+          2. cTrader MCP quote
+          3. DataFeed providers (TwelveData, AlphaVantage, GoldAPI)
+          4. Return 0.0 (caller must handle)
+        
+        NOTE: FIX price is prioritized over DataFeed because DataFeed providers
+        can be stale, rate-limited, or return synthetic data when all fail.
+        FIX price comes directly from the broker's market data stream (port 5211).
+        """
+        # 1. FIX price — live from broker, always fresh
+        if self.ctrader_fix:
+            quote = self.ctrader_fix.get_latest_quote(self.config.symbol)
+            if quote and quote.get("bid"):
+                fix_price = float(quote["bid"])
+                if fix_price > 0:
+                    return fix_price
+
+        # 2. cTrader MCP quote
+        if self.ctrader_mcp and self.ctrader_mcp.is_connected:
+            try:
+                quote = await self.ctrader_mcp.get_quote(self.config.symbol)
+                if quote:
+                    bid = float(quote.get("bid", 0))
+                    ask = float(quote.get("ask", 0))
+                    if bid > 0 and ask > 0:
+                        return (bid + ask) / 2
+            except Exception as e:
+                log.warning(f"MCP quote failed: {e}")
+
+        # 3. DataFeed providers (may be stale/rate-limited)
         if self.data_feed:
-            quote = await self.data_feed.get_quote()
-            if quote:
-                return quote.price
+            try:
+                quote = await self.data_feed.get_quote()
+                if quote and quote.price > 0:
+                    return quote.price
+            except Exception as e:
+                log.warning(f"DataFeed quote failed: {e}")
 
-        # Fallback from cTrader
-        if self.ctrader_mcp:
-            quote = await self.ctrader_mcp.get_quote(self.config.symbol)
-            if quote:
-                bid = float(quote.get("bid", 0))
-                ask = float(quote.get("ask", 0))
-                return (bid + ask) / 2
+        log.warning("All price sources failed — returning 0.0")
+        return 0.0
 
+    def _get_fix_price(self) -> float:
+        """
+        Get live price from FIX connection only (synchronous).
+        Used for price validation checks.
+        Returns 0.0 if FIX price not available.
+        """
         if self.ctrader_fix:
             quote = self.ctrader_fix.get_latest_quote(self.config.symbol)
             if quote and quote.get("bid"):
                 return float(quote["bid"])
-
         return 0.0
 
     async def _verify_entry_price(self, proposed_entry: float) -> float:
