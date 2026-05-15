@@ -94,8 +94,19 @@ class FIXMessage:
 
     def build(self, msg_type: str, seq_num: int, sender: str, target: str,
               sender_sub: str = "") -> bytes:
-        """Build a complete FIX message with header and checksum."""
-        # Body fields (excluding header tags 8, 9, 35)
+        """
+        Build a complete FIX 4.4 message with proper header and checksum.
+        
+        FIX message structure:
+          8=FIX.4.4|9=BODY_LENGTH|35=...|49=...|...|10=CHECKSUM|
+        
+        Body = everything from tag 35 to before tag 10 (inclusive of SOH delimiters)
+        BodyLength (tag 9) = byte count of body
+        Checksum (tag 10) = sum of all bytes from tag 8 through end of body, mod 256
+        """
+        SOH = self.SOH
+
+        # Build body (tag 35 onwards, before checksum)
         body_parts = []
         body_parts.append(f"35={msg_type}")
         body_parts.append(f"49={sender}")
@@ -109,13 +120,20 @@ class FIXMessage:
             if tag not in (8, 9, 10, 35, 49, 56, 50, 34, 52):
                 body_parts.append(f"{tag}={value}")
 
-        body = self.SOH.join(body_parts) + self.SOH
-        # Header
-        header = f"8={self.BEGIN_STRING}{self.SOH}9={len(body)}{self.SOH}"
-        # Checksum
-        full_msg = header + body
-        checksum = sum(ord(c) for c in full_msg) % 256
-        full_msg += f"10={checksum:03d}{self.SOH}"
+        # Body string: each field followed by SOH
+        body = SOH.join(body_parts) + SOH
+
+        # Header: BeginString + BodyLength
+        header = f"8={self.BEGIN_STRING}{SOH}9={len(body)}{SOH}"
+
+        # Message without checksum
+        msg_without_checksum = header + body
+
+        # Checksum: sum of all bytes in header+body mod 256
+        checksum = sum(ord(c) for c in msg_without_checksum) % 256
+        
+        # Complete message
+        full_msg = msg_without_checksum + f"10={checksum:03d}{SOH}"
 
         return full_msg.encode("ascii")
 
@@ -272,17 +290,34 @@ class FIXConnection:
             self.config.target_comp_id,
             self.sender_sub_id,
         )
+        log.info(f"[{self.connection_type}] Sending Logon... "
+                 f"(Sender: {self.config.sender_comp_id}, "
+                 f"Sub: {self.sender_sub_id}, "
+                 f"Password: {'*' * len(self.config.password) if self.config.password else 'NONE'})")
         self._send_raw(raw)
-        log.info(f"[{self.connection_type}] Logon sent.")
 
-        # Wait for Logon response
-        response = self._recv_message(timeout=10)
-        if response and response.get(35) == "A":
-            log.info(f"[{self.connection_type}] Logon accepted.")
-            return True
-        else:
-            log.error(f"[{self.connection_type}] Logon rejected or no response.")
-            return False
+        # Wait for Logon response (try multiple reads)
+        for i in range(3):
+            response = self._recv_message(timeout=10)
+            if response:
+                msg_type = response.get(35)
+                if msg_type == "A":
+                    log.info(f"[{self.connection_type}] Logon ACCEPTED.")
+                    return True
+                elif msg_type == "3":
+                    reason = response.get(58, "Unknown reason")
+                    log.error(f"[{self.connection_type}] Logon REJECTED: {reason}")
+                    return False
+                elif msg_type == "5":
+                    reason = response.get(58, "Logout received")
+                    log.error(f"[{self.connection_type}] Server sent Logout: {reason}")
+                    return False
+                else:
+                    log.warning(f"[{self.connection_type}] Unexpected response type: {msg_type}")
+                    continue
+
+        log.error(f"[{self.connection_type}] No Logon response after 3 attempts.")
+        return False
 
     def _send_logout(self):
         """Send Logout message (35=5)."""
