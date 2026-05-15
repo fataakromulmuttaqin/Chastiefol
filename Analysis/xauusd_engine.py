@@ -118,6 +118,61 @@ class TechnicalIndicators:
         return k, d
 
     @staticmethod
+    def parabolic_sar(high: pd.Series, low: pd.Series,
+                      start: float = 0.02, increment: float = 0.02,
+                      maximum: float = 0.2) -> pd.Series:
+        """
+        Parabolic SAR calculation.
+        Returns a Series where value < price = bullish, value > price = bearish.
+        """
+        length = len(high)
+        sar = pd.Series(np.nan, index=high.index)
+        af = start
+        is_bull = True
+        ep = high.iloc[0]
+        sar_val = low.iloc[0]
+
+        for i in range(1, length):
+            if is_bull:
+                sar_val = sar_val + af * (ep - sar_val)
+                # SAR cannot be above prior two lows
+                sar_val = min(sar_val, low.iloc[i - 1])
+                if i >= 2:
+                    sar_val = min(sar_val, low.iloc[i - 2])
+
+                if low.iloc[i] < sar_val:
+                    # Flip to bearish
+                    is_bull = False
+                    sar_val = ep
+                    ep = low.iloc[i]
+                    af = start
+                else:
+                    if high.iloc[i] > ep:
+                        ep = high.iloc[i]
+                        af = min(af + increment, maximum)
+            else:
+                sar_val = sar_val + af * (ep - sar_val)
+                # SAR cannot be below prior two highs
+                sar_val = max(sar_val, high.iloc[i - 1])
+                if i >= 2:
+                    sar_val = max(sar_val, high.iloc[i - 2])
+
+                if high.iloc[i] > sar_val:
+                    # Flip to bullish
+                    is_bull = True
+                    sar_val = ep
+                    ep = high.iloc[i]
+                    af = start
+                else:
+                    if low.iloc[i] < ep:
+                        ep = low.iloc[i]
+                        af = min(af + increment, maximum)
+
+            sar.iloc[i] = sar_val
+
+        return sar
+
+    @staticmethod
     def vwap(high: pd.Series, low: pd.Series, close: pd.Series,
              volume: pd.Series) -> pd.Series:
         typical = (high + low + close) / 3
@@ -312,14 +367,15 @@ class ConfluenceScorer:
     """
 
     WEIGHTS = {
-        "market_structure_aligned": 20,
+        "psar_aligned":             18,
+        "market_structure_aligned": 17,
         "ema_stack":                15,
-        "rsi_zone":                 12,
+        "rsi_zone":                 10,
         "macd_aligned":             10,
-        "order_block_proximity":    15,
-        "fvg_in_range":             10,
-        "session_active":           10,
-        "bos_confirmed":            8,
+        "order_block_proximity":    10,
+        "fvg_in_range":              8,
+        "session_active":            7,
+        "bos_confirmed":             5,
     }
 
     def score(self, df: pd.DataFrame, direction: Signal,
@@ -337,17 +393,36 @@ class ConfluenceScorer:
             score += self.WEIGHTS["market_structure_aligned"]
             reasons.append(f"Structure {structure.bias.value} aligns with {direction.value}")
 
-        # 2. EMA Stack (9 > 21 > 50 for bull, inverse for bear)
-        ema9  = ti.ema(df["close"], 9).iloc[-1]
-        ema21 = ti.ema(df["close"], 21).iloc[-1]
-        ema50 = ti.ema(df["close"], 50).iloc[-1]
-        bull_stack = ema9 > ema21 > ema50
-        bear_stack = ema9 < ema21 < ema50
+        # 2. Parabolic SAR alignment
+        psar = ti.parabolic_sar(df["high"], df["low"])
+        psar_val = psar.iloc[-1]
+        psar_prev = psar.iloc[-2] if len(psar) > 1 else psar_val
+        psar_bull = close > psar_val
+        psar_bear = close < psar_val
+        psar_flip_bull = psar_bull and not (df["close"].iloc[-2] > psar_prev)
+        psar_flip_bear = psar_bear and not (df["close"].iloc[-2] < psar_prev)
+
+        if (direction == Signal.BUY and psar_bull) or \
+           (direction == Signal.SELL and psar_bear):
+            score += self.WEIGHTS["psar_aligned"]
+            if (direction == Signal.BUY and psar_flip_bull) or \
+               (direction == Signal.SELL and psar_flip_bear):
+                reasons.append(f"Parabolic SAR flipped {'bullish' if direction == Signal.BUY else 'bearish'} (SAR: {psar_val:.2f})")
+            else:
+                reasons.append(f"Parabolic SAR confirms {'bullish' if direction == Signal.BUY else 'bearish'} (SAR: {psar_val:.2f})")
+
+        # 2. EMA Stack (20 > 50 > 100 > 200 for bull, inverse for bear)
+        ema20  = ti.ema(df["close"], 20).iloc[-1]
+        ema50  = ti.ema(df["close"], 50).iloc[-1]
+        ema100 = ti.ema(df["close"], 100).iloc[-1]
+        ema200 = ti.ema(df["close"], 200).iloc[-1]
+        bull_stack = ema20 > ema50 > ema100 > ema200
+        bear_stack = ema20 < ema50 < ema100 < ema200
 
         if (direction == Signal.BUY  and bull_stack) or \
            (direction == Signal.SELL and bear_stack):
             score += self.WEIGHTS["ema_stack"]
-            reasons.append("EMA 9/21/50 stack confirmed")
+            reasons.append("EMA 20/50/100/200 stack confirmed")
 
         # 3. RSI zone (not overbought for buys, not oversold for sells)
         rsi = ti.rsi(df["close"]).iloc[-1]
@@ -434,6 +509,9 @@ class ChastiefollAgent:
 
         df must have columns: open, high, low, close, volume
         Minimum 100 bars recommended.
+        
+        Primary signal: PSAR flip + EMA alignment
+        Confirmation: Market structure, RSI, MACD, OB, FVG, session
         """
         if len(df) < 50:
             return None
@@ -443,13 +521,45 @@ class ChastiefollAgent:
         close     = df["close"].iloc[-1]
         atr_val   = self.ti.atr(df["high"], df["low"], df["close"]).iloc[-1]
 
-        # Determine candidate direction from structure
-        if structure.bias == Bias.BULLISH:
+        # ── Primary Signal: PSAR + EMA alignment ──
+        psar = self.ti.parabolic_sar(df["high"], df["low"])
+        psar_val = psar.iloc[-1]
+        psar_bull = close > psar_val
+        psar_bear = close < psar_val
+
+        # EMA 20/50/100/200
+        ema20  = self.ti.ema(df["close"], 20).iloc[-1]
+        ema50  = self.ti.ema(df["close"], 50).iloc[-1]
+        ema100 = self.ti.ema(df["close"], 100).iloc[-1]
+        ema200 = self.ti.ema(df["close"], 200).iloc[-1]
+
+        ema_bull_align = ema20 > ema50 > ema100 > ema200
+        ema_bear_align = ema20 < ema50 < ema100 < ema200
+        price_above_all = close > ema20 and close > ema50 and close > ema100 and close > ema200
+        price_below_all = close < ema20 and close < ema50 and close < ema100 and close < ema200
+
+        # Determine candidate direction from PSAR + EMA (matching Pine Script logic)
+        # Primary: PSAR confirms + full EMA alignment + price above/below all
+        # Alternative: PSAR confirms + price above/below EMA20 & EMA50 (partial)
+        direction = None
+
+        if psar_bull and ema_bull_align and price_above_all:
             direction = Signal.BUY
-        elif structure.bias == Bias.BEARISH:
+        elif psar_bear and ema_bear_align and price_below_all:
             direction = Signal.SELL
-        else:
-            return None  # No clear bias → no trade
+        elif psar_bull and close > ema20 and close > ema50:
+            # Alternative entry — partial EMA alignment
+            direction = Signal.BUY
+        elif psar_bear and close < ema20 and close < ema50:
+            direction = Signal.SELL
+
+        if direction is None:
+            return None  # No PSAR + EMA alignment → no trade
+
+        # Also require structure bias to not contradict
+        if (direction == Signal.BUY and structure.bias == Bias.BEARISH) or \
+           (direction == Signal.SELL and structure.bias == Bias.BULLISH):
+            return None  # Structure contradicts PSAR signal
 
         # Score confluence
         conf_score, reasons = self.scorer.score(
