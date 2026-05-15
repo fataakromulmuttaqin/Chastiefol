@@ -562,6 +562,56 @@ class FIXConnection:
         log.info(f"[TRADE] Cancel request sent for {client_order_id}")
 
     # ──────────────────────────────────────────
+    # Position Management (SL/TP after fill)
+    # ──────────────────────────────────────────
+
+    def modify_position(
+        self,
+        position_id: str,       # Broker's OrderID from fill confirmation
+        symbol: str,
+        stop_loss: float = 0.0,
+        take_profit: float = 0.0,
+        symbol_map: Optional["FIXSymbolMap"] = None,
+    ) -> str:
+        """
+        Modify an open position to set or update SL/TP (35=AM).
+        Call this AFTER order fill (exec_type=F) to attach SL/TP.
+        
+        Returns client_order_id for tracking.
+        """
+        numeric_symbol = symbol
+        if symbol_map:
+            try:
+                numeric_symbol = symbol_map.get_numeric_id(symbol)
+            except ValueError as e:
+                log.error(f"[TRADE] Symbol mapping failed for modify: {e}")
+                return ""
+
+        client_id = f"MOD_{int(time.time()*1000)}"
+
+        msg = FIXMessage()
+        msg.set(11, client_id)           # ClOrdID
+        msg.set(41, position_id)         # OrigClOrdID (the filled order's broker ID)
+        msg.set(55, numeric_symbol)      # Symbol (numeric ID)
+        msg.set(60, FIXMessage._utc_timestamp())
+
+        if stop_loss > 0:
+            msg.set(99, stop_loss)       # StopPx
+        if take_profit > 0:
+            msg.set(93, take_profit)    # TakeProfitPx (cTrader tag for TP)
+
+        raw = msg.build(
+            "AM", self._next_seq(),   # Order Cancel/Replace (cTrader uses 35=AM for position modify)
+            self.config.sender_comp_id,
+            self.config.target_comp_id,
+            self.sender_sub_id,
+            self.sender_sub_id,
+        )
+        self._send_raw(raw)
+        log.info(f"[TRADE] Position modify sent: ID={position_id} SL={stop_loss} TP={take_profit}")
+        return client_id
+
+    # ──────────────────────────────────────────
     # Market Data (Price Connection)
     # ──────────────────────────────────────────
 
@@ -982,10 +1032,22 @@ class CTraderFIXConnector:
                 del self._pending_executions[client_id]
                 exec_type = result.get("exec_type", "")
                 if exec_type == "F":
-                    log.info(f"[TRADE] Order CONFIRMED by broker: {result['side']} {result['filled_qty']} {result['symbol']} @ {result['avg_price']} | BrokerID={result['order_id']}")
+                    broker_id = result.get("order_id", client_id)
+                    log.info(f"[TRADE] Order CONFIRMED by broker: {result['side']} {result['filled_qty']} {result['symbol']} @ {result['avg_price']} | BrokerID={broker_id}")
+
+                    # Attach SL/TP to the filled position
+                    if stop_loss > 0 or take_profit > 0:
+                        self.trade_conn.modify_position(
+                            position_id=broker_id,
+                            symbol=symbol,
+                            stop_loss=stop_loss,
+                            take_profit=take_profit,
+                            symbol_map=self.symbol_map,
+                        )
+
                     return {
                         "success": True,
-                        "order_id": result.get("order_id", client_id),
+                        "order_id": broker_id,
                         "execution_price": float(result.get("avg_price") or 0),
                         "filled_volume": float(result.get("filled_qty") or 0),
                         "text": "",

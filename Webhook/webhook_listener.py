@@ -60,7 +60,7 @@ class WebhookConfig:
     secret_key: str = ""
     allowed_symbols: List[str] = field(default_factory=lambda: ["XAUUSD"])
     max_volume: float = 1.0
-    min_volume: float = 0.01
+    min_volume: float = 1.0  # cTrader FIX demo server min = 1.0 lot
     rate_limit_per_minute: int = 10
     enable_hmac_auth: bool = True
 

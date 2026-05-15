@@ -1,2 +1,7 @@
 Analysis/__pycache__/
 __pycache__/
+*.pyc
+.env
+Dashboard/frontend/node_modules/
+.vite/
+*.egg-info/

@@ -527,11 +527,33 @@ class ChastiefollIntegrated:
             log.info(f"Signal found but confidence too low: {setup.confidence*100:.0f}%")
             return
 
+        # ── Verify price from FIX fallback before executing ──
+        # If all data providers failed, entry price may be stale/wrong.
+        # Use FIX market data as authoritative fallback to validate.
+        verified_entry = await self._verify_entry_price(setup.entry)
+        if verified_entry == 0.0:
+            log.warning("Cannot verify entry price — all price sources unavailable.")
+            return
+
+        if verified_entry != setup.entry:
+            log.warning(f"[PRICE] Entry price corrected: ${setup.entry:.2f} → ${verified_entry:.2f} (FIX fallback)")
+            setup.entry = verified_entry
+            # Recalculate SL/TP relative to verified entry
+            sl_distance = abs(verified_entry - setup.stop_loss)
+            if setup.signal == Signal.BUY:
+                setup.stop_loss = round(verified_entry - sl_distance, 2)
+                setup.take_profit = round(verified_entry + sl_distance * setup.rr_ratio, 2)
+            else:
+                setup.stop_loss = round(verified_entry + sl_distance, 2)
+                setup.take_profit = round(verified_entry - sl_distance * setup.rr_ratio, 2)
+            setup.rr_ratio = round(abs(setup.take_profit - verified_entry) / abs(setup.stop_loss - verified_entry), 2)
+
         # Position size
         pos_spec = self.position_sizer.calculate(
             self.account, setup.entry, setup.stop_loss
         )
         lot = round(pos_spec.lot_size * status["size_multiplier"], 2)
+        log.info(f"  Verified Entry: ${setup.entry:.2f} (FIX validated)")
 
         log.info(f"{'*'*50}")
         log.info(f"  SIGNAL: {setup.signal.value} | Confidence: {setup.confidence*100:.0f}%")
@@ -845,6 +867,45 @@ class ChastiefollIntegrated:
             if quote and quote.get("bid"):
                 return float(quote["bid"])
 
+        return 0.0
+
+    async def _verify_entry_price(self, proposed_entry: float) -> float:
+        """
+        Verify proposed entry price against FIX market data.
+        Returns corrected price or 0.0 if no price data available.
+        
+        If all external data providers failed and we have FIX connectivity,
+        use FIX bid as the authoritative price. Also validates that
+        proposed_entry is within reasonable bounds (±5% of FIX price).
+        """
+        # Priority 1: FIX market data (most authoritative, always connected)
+        if self.ctrader_fix:
+            quote = self.ctrader_fix.get_latest_quote(self.config.symbol)
+            if quote:
+                fix_bid = float(quote.get("bid", 0))
+                fix_ask = float(quote.get("ask", 0))
+                if fix_bid > 0 and fix_ask > 0:
+                    fix_mid = (fix_bid + fix_ask) / 2
+                    # If proposed price is way off from FIX, something is wrong
+                    if proposed_entry > 0 and fix_mid > 0:
+                        deviation = abs(proposed_entry - fix_mid) / fix_mid
+                        if deviation > 0.05:
+                            log.warning(f"[PRICE] Large deviation: signal=${proposed_entry:.2f} FIX mid=${fix_mid:.2f} ({deviation*100:.1f}%)")
+                            return fix_mid
+                        # If within tolerance, use FIX mid (more accurate)
+                        if abs(proposed_entry - fix_mid) / fix_mid > 0.001:
+                            return fix_mid
+                        return proposed_entry
+                    elif fix_mid > 0:
+                        return fix_mid
+
+        # Priority 2: data_feed (external providers)
+        if self.data_feed:
+            quote = await self.data_feed.get_quote()
+            if quote and quote.price > 0:
+                return quote.price
+
+        # No price data available
         return 0.0
 
     def _synthetic_data(self):

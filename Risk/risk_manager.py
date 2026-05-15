@@ -90,7 +90,7 @@ class PositionSizer:
                  risk_pct:         float = 1.0,      # % balance to risk
                  max_risk_pct:     float = 2.0,       # hard cap
                  max_lots:         float = 5.0,
-                 min_lots:         float = 0.01,
+                 min_lots:         float = 1.0,    # cTrader FIX demo server min = 1.0 lot
                  leverage:         int   = 100,
                  pip_value_per_lot: float = 10.0,     # USD per pip per standard lot
                  model:            RiskModel = RiskModel.FIXED_PERCENT):
