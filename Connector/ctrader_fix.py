@@ -100,16 +100,7 @@ class FIXSymbolMap:
     # You MUST verify and update with your broker's actual numeric IDs.
     # Check cTrader Desktop → Symbol Info or use Open API.
     _DEFAULT_MAP: Dict[str, str] = {
-        "XAUUSD": "1",
-        "EURUSD": "2",
-        "GBPUSD": "3",
-        "USDJPY": "4",
-        "AUDUSD": "5",
-        "USDCAD": "6",
-        "USDCHF": "7",
-        "NZDUSD": "8",
-        "XAGUSD": "9",
-        "BTCUSD": "10",
+        "XAUUSD": "41",
     }
 
     def __init__(self, custom_map: Optional[Dict[str, str]] = None):
