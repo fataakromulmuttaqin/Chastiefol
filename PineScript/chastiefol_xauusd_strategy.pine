@@ -316,15 +316,17 @@ plotshape(close_sell, "Close SELL", shape.xcross, location.belowbar,
           color=color.new(#FFA502, 0), size=size.small)
 
 // ── Background: Session Active ──
-// Explicit if/else per bar (required in overlay mode for v6 to recalculate each candle)
+// Must be global scope — separate if, no else-if chaining
 if session_active and use_session
-    bgcolor(color.new(#2196F3, 95), title="Session Active")
+    bgcolor(color.new(#2196F3, 90))
 
 // ── Background: EMA Alignment ──
+// Separate if blocks to avoid local scope (CE10188 in Pine v6)
 if ema_bull_align
-    bgcolor(color.new(#00C853, 90), title="EMA Bull Alignment")
-else if ema_bear_align
-    bgcolor(color.new(#FF1744, 90), title="EMA Bear Alignment")
+    bgcolor(color.new(#00C853, 90))
+
+if ema_bear_align
+    bgcolor(color.new(#FF1744, 90))
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
