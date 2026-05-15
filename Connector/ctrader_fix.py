@@ -24,6 +24,7 @@ import time
 import logging
 import asyncio
 import threading
+import os
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Callable, List
@@ -67,6 +68,119 @@ class FIXConfig:
     heartbeat_interval: int = 30
     reconnect_attempts: int = 5
     reconnect_delay: float = 2.0
+
+
+# ──────────────────────────────────────────────
+# Symbol Mapping (String → Numeric ID)
+# ──────────────────────────────────────────────
+# cTrader FIX API requires NUMERIC symbol IDs in tag 55,
+# NOT string names like "XAUUSD". Sending a string causes
+# the broker to reply with 35=j (Session Reject):
+#   "Symbol(55) must be numeric. But it is XAUUSD"
+#
+# How to find your numeric IDs:
+#   - cTrader Desktop/Web → Symbol Info → "Symbol ID"
+#   - Or use cTrader Open API / MCP to query symbol list
+#
+# Configuration priority:
+#   1. Environment variable: FIX_SYMBOL_MAP (JSON format)
+#      Example: FIX_SYMBOL_MAP={"XAUUSD":"1","EURUSD":"2","GBPUSD":"3"}
+#   2. FIXSymbolMap class defaults (common cTrader demo values)
+# ──────────────────────────────────────────────
+
+class FIXSymbolMap:
+    """
+    Maps human-readable symbol names to cTrader numeric IDs.
+    
+    cTrader FIX requires tag 55 to be a numeric symbol ID.
+    This class provides configurable mapping via env vars or manual config.
+    """
+
+    # Default mapping — these are PLACEHOLDER values.
+    # You MUST verify and update with your broker's actual numeric IDs.
+    # Check cTrader Desktop → Symbol Info or use Open API.
+    _DEFAULT_MAP: Dict[str, str] = {
+        "XAUUSD": "1",
+        "EURUSD": "2",
+        "GBPUSD": "3",
+        "USDJPY": "4",
+        "AUDUSD": "5",
+        "USDCAD": "6",
+        "USDCHF": "7",
+        "NZDUSD": "8",
+        "XAGUSD": "9",
+        "BTCUSD": "10",
+    }
+
+    def __init__(self, custom_map: Optional[Dict[str, str]] = None):
+        """
+        Initialize symbol mapping.
+        
+        Priority:
+          1. custom_map argument (if provided)
+          2. FIX_SYMBOL_MAP env var (JSON string)
+          3. _DEFAULT_MAP fallback
+        """
+        self._map: Dict[str, str] = dict(self._DEFAULT_MAP)
+
+        # Load from environment variable (JSON format)
+        env_map = os.environ.get("FIX_SYMBOL_MAP", "")
+        if env_map:
+            try:
+                import json
+                parsed = json.loads(env_map)
+                if isinstance(parsed, dict):
+                    self._map.update({k.upper(): str(v) for k, v in parsed.items()})
+                    log.info(f"[SymbolMap] Loaded {len(parsed)} symbols from FIX_SYMBOL_MAP env")
+            except (ValueError, TypeError) as e:
+                log.warning(f"[SymbolMap] Failed to parse FIX_SYMBOL_MAP env: {e}")
+
+        # Override with custom map (highest priority)
+        if custom_map:
+            self._map.update({k.upper(): str(v) for k, v in custom_map.items()})
+            log.info(f"[SymbolMap] Applied {len(custom_map)} custom symbol mappings")
+
+    def get_numeric_id(self, symbol: str) -> str:
+        """
+        Get the numeric ID for a symbol name.
+        
+        Args:
+            symbol: Human-readable symbol (e.g. "XAUUSD")
+            
+        Returns:
+            Numeric ID string for FIX tag 55
+            
+        Raises:
+            ValueError: If symbol is not found in any mapping
+        """
+        key = symbol.upper().strip()
+        numeric_id = self._map.get(key)
+        if numeric_id is None:
+            # If the symbol is already numeric, pass it through
+            if key.isdigit():
+                return key
+            raise ValueError(
+                f"Symbol '{symbol}' has no numeric ID mapping. "
+                f"Add it to FIX_SYMBOL_MAP env or pass custom_map to FIXSymbolMap. "
+                f"Known symbols: {list(self._map.keys())}"
+            )
+        return numeric_id
+
+    def get_symbol_name(self, numeric_id: str) -> str:
+        """Reverse lookup: numeric ID → symbol name."""
+        for name, nid in self._map.items():
+            if nid == str(numeric_id):
+                return name
+        return numeric_id  # Return as-is if not found
+
+    def set(self, symbol: str, numeric_id: str):
+        """Add or update a symbol mapping at runtime."""
+        self._map[symbol.upper().strip()] = str(numeric_id)
+
+    @property
+    def known_symbols(self) -> List[str]:
+        """List all known symbol names."""
+        return list(self._map.keys())
 
 
 # ──────────────────────────────────────────────
@@ -190,6 +304,7 @@ class FIXConnection:
         self.on_message: Optional[Callable[[FIXMessage], None]] = None
         self.on_execution: Optional[Callable[[Dict], None]] = None
         self.on_market_data: Optional[Callable[[Dict], None]] = None
+        self.on_session_reject: Optional[Callable[[Dict], None]] = None
         self.on_disconnect: Optional[Callable[[], None]] = None
 
     @property
@@ -368,11 +483,16 @@ class FIXConnection:
         stop_loss: float = 0.0,
         take_profit: float = 0.0,
         client_order_id: str = "",
+        symbol_map: Optional["FIXSymbolMap"] = None,
     ) -> str:
         """
         Send a new order (35=D).
         side: "BUY" or "SELL"
         order_type: "MARKET", "LIMIT", "STOP"
+        
+        IMPORTANT: cTrader FIX requires tag 55 to be a NUMERIC symbol ID.
+        If symbol_map is provided, the symbol name is translated automatically.
+        
         Returns client_order_id.
         """
         if not client_order_id:
@@ -381,9 +501,19 @@ class FIXConnection:
         fix_side = "1" if side.upper() == "BUY" else "2"
         fix_ord_type = {"MARKET": "1", "LIMIT": "2", "STOP": "3"}.get(order_type.upper(), "1")
 
+        # Translate symbol to numeric ID for cTrader FIX
+        numeric_symbol = symbol
+        if symbol_map:
+            try:
+                numeric_symbol = symbol_map.get_numeric_id(symbol)
+                log.info(f"[TRADE] Symbol mapped: {symbol} → {numeric_symbol}")
+            except ValueError as e:
+                log.error(f"[TRADE] Symbol mapping failed: {e}")
+                return client_order_id
+
         msg = FIXMessage()
         msg.set(11, client_order_id)  # ClOrdID
-        msg.set(55, symbol)           # Symbol
+        msg.set(55, numeric_symbol)   # Symbol (NUMERIC ID for cTrader)
         msg.set(54, fix_side)         # Side
         msg.set(38, quantity)         # OrderQty (in lots)
         msg.set(40, fix_ord_type)     # OrdType
@@ -409,13 +539,24 @@ class FIXConnection:
                  f"({order_type}) ID={client_order_id}")
         return client_order_id
 
-    def send_cancel_order(self, client_order_id: str, symbol: str, side: str):
+    def send_cancel_order(self, client_order_id: str, symbol: str, side: str,
+                         symbol_map: Optional["FIXSymbolMap"] = None):
         """Send order cancel request (35=F)."""
         fix_side = "1" if side.upper() == "BUY" else "2"
+        
+        # Translate symbol to numeric ID for cTrader FIX
+        numeric_symbol = symbol
+        if symbol_map:
+            try:
+                numeric_symbol = symbol_map.get_numeric_id(symbol)
+            except ValueError as e:
+                log.error(f"[TRADE] Symbol mapping failed for cancel: {e}")
+                return
+
         msg = FIXMessage()
         msg.set(11, f"CXL_{int(time.time()*1000)}")  # New ClOrdID
         msg.set(41, client_order_id)  # OrigClOrdID
-        msg.set(55, symbol)
+        msg.set(55, numeric_symbol)   # Symbol (NUMERIC ID)
         msg.set(54, fix_side)
         msg.set(60, FIXMessage._utc_timestamp())
 
@@ -433,8 +574,19 @@ class FIXConnection:
     # Market Data (Price Connection)
     # ──────────────────────────────────────────
 
-    def subscribe_market_data(self, symbol: str, req_id: str = "1"):
+    def subscribe_market_data(self, symbol: str, req_id: str = "1",
+                              symbol_map: Optional["FIXSymbolMap"] = None):
         """Subscribe to market data (35=V)."""
+        # Translate symbol to numeric ID for cTrader FIX
+        numeric_symbol = symbol
+        if symbol_map:
+            try:
+                numeric_symbol = symbol_map.get_numeric_id(symbol)
+                log.info(f"[PRICE] Symbol mapped: {symbol} → {numeric_symbol}")
+            except ValueError as e:
+                log.error(f"[PRICE] Symbol mapping failed: {e}")
+                return
+
         msg = FIXMessage()
         msg.set(262, req_id)   # MDReqID
         msg.set(263, 1)        # SubscriptionRequestType: Snapshot + Updates
@@ -444,7 +596,7 @@ class FIXConnection:
         msg.set(269, 0)        # MDEntryType: Bid
         # Second entry type (Ask) — simplified for demo
         msg.set(146, 1)        # NoRelatedSym
-        msg.set(55, symbol)    # Symbol
+        msg.set(55, numeric_symbol)  # Symbol (NUMERIC ID)
 
         raw = msg.build(
             "V", self._next_seq(),
@@ -454,15 +606,25 @@ class FIXConnection:
             self.sender_sub_id,
         )
         self._send_raw(raw)
-        log.info(f"[PRICE] Subscribed to market data for {symbol}")
+        log.info(f"[PRICE] Subscribed to market data for {symbol} (ID={numeric_symbol})")
 
-    def unsubscribe_market_data(self, symbol: str, req_id: str = "1"):
+    def unsubscribe_market_data(self, symbol: str, req_id: str = "1",
+                                 symbol_map: Optional["FIXSymbolMap"] = None):
         """Unsubscribe from market data (35=V with type=2)."""
+        # Translate symbol to numeric ID for cTrader FIX
+        numeric_symbol = symbol
+        if symbol_map:
+            try:
+                numeric_symbol = symbol_map.get_numeric_id(symbol)
+            except ValueError as e:
+                log.error(f"[PRICE] Symbol mapping failed for unsubscribe: {e}")
+                return
+
         msg = FIXMessage()
         msg.set(262, req_id)
         msg.set(263, 2)  # Unsubscribe
         msg.set(146, 1)
-        msg.set(55, symbol)
+        msg.set(55, numeric_symbol)  # Symbol (NUMERIC ID)
 
         raw = msg.build(
             "V", self._next_seq(),
@@ -472,7 +634,7 @@ class FIXConnection:
             self.sender_sub_id,
         )
         self._send_raw(raw)
-        log.info(f"[PRICE] Unsubscribed from {symbol}")
+        log.info(f"[PRICE] Unsubscribed from {symbol} (ID={numeric_symbol})")
 
     # ──────────────────────────────────────────
     # Low-level I/O
@@ -560,9 +722,29 @@ class FIXConnection:
                     # Market Data Incremental Refresh
                     self._handle_market_data(msg)
                 elif msg_type == "3":
-                    # Reject
+                    # Reject (Session-level)
                     log.error(f"[{self.connection_type}] Message rejected: "
                               f"{msg.get(58, 'Unknown reason')}")
+                elif msg_type == "j":
+                    # Business Message Reject (35=j)
+                    # This is what cTrader sends when tag 55 has invalid format
+                    # (e.g., string "XAUUSD" instead of numeric ID)
+                    ref_seq = msg.get(45, "?")
+                    ref_msg_type = msg.get(372, "?")
+                    reason = msg.get(58, "Unknown reason")
+                    reject_reason = msg.get(380, "?")
+                    log.error(
+                        f"[{self.connection_type}] SESSION REJECT (35=j): "
+                        f"RefSeqNum={ref_seq} RefMsgType={ref_msg_type} "
+                        f"Reason={reason} BusinessRejectReason={reject_reason}"
+                    )
+                    if self.on_session_reject:
+                        self.on_session_reject({
+                            "ref_seq_num": ref_seq,
+                            "ref_msg_type": ref_msg_type,
+                            "reason": reason,
+                            "reject_reason": reject_reason,
+                        })
 
                 # Generic callback
                 if self.on_message:
@@ -629,10 +811,18 @@ class CTraderFIXConnector:
         connector.subscribe("XAUUSD")
         connector.buy("XAUUSD", 0.01, stop_loss=2340.0, take_profit=2380.0)
         connector.disconnect()
+    
+    Symbol Mapping:
+        cTrader FIX requires numeric symbol IDs in tag 55.
+        Set via environment variable:
+            FIX_SYMBOL_MAP={"XAUUSD":"1","EURUSD":"2"}
+        Or pass custom_symbol_map dict to constructor.
     """
 
-    def __init__(self, config: FIXConfig):
+    def __init__(self, config: FIXConfig, custom_symbol_map: Optional[Dict[str, str]] = None):
         self.config = config
+        self.symbol_map = FIXSymbolMap(custom_map=custom_symbol_map)
+        
         self.price_conn = FIXConnection(
             config.price_host, config.price_port, config,
             config.price_sender_sub_id, "PRICE",
@@ -650,6 +840,7 @@ class CTraderFIXConnector:
         # Wire up callbacks
         self.price_conn.on_market_data = self._on_market_data
         self.trade_conn.on_execution = self._on_execution
+        self.trade_conn.on_session_reject = self._on_session_reject
 
     def connect(self) -> bool:
         """Connect both Price and Trade connections."""
@@ -674,29 +865,33 @@ class CTraderFIXConnector:
 
     def subscribe(self, symbol: str):
         """Subscribe to market data for a symbol."""
-        self.price_conn.subscribe_market_data(symbol)
+        self.price_conn.subscribe_market_data(symbol, symbol_map=self.symbol_map)
 
     def unsubscribe(self, symbol: str):
         """Unsubscribe from market data."""
-        self.price_conn.unsubscribe_market_data(symbol)
+        self.price_conn.unsubscribe_market_data(symbol, symbol_map=self.symbol_map)
 
     def buy(self, symbol: str, volume: float, order_type: str = "MARKET",
             price: float = 0.0, stop_loss: float = 0.0, take_profit: float = 0.0) -> str:
         """Send a BUY order."""
         return self.trade_conn.send_new_order(
-            symbol, "BUY", volume, order_type, price, stop_loss, take_profit
+            symbol, "BUY", volume, order_type, price, stop_loss, take_profit,
+            symbol_map=self.symbol_map,
         )
 
     def sell(self, symbol: str, volume: float, order_type: str = "MARKET",
              price: float = 0.0, stop_loss: float = 0.0, take_profit: float = 0.0) -> str:
         """Send a SELL order."""
         return self.trade_conn.send_new_order(
-            symbol, "SELL", volume, order_type, price, stop_loss, take_profit
+            symbol, "SELL", volume, order_type, price, stop_loss, take_profit,
+            symbol_map=self.symbol_map,
         )
 
     def cancel_order(self, client_order_id: str, symbol: str, side: str):
         """Cancel a pending order."""
-        self.trade_conn.send_cancel_order(client_order_id, symbol, side)
+        self.trade_conn.send_cancel_order(
+            client_order_id, symbol, side, symbol_map=self.symbol_map,
+        )
 
     def get_latest_quote(self, symbol: str) -> Optional[Dict]:
         """Get latest cached quote for a symbol."""
@@ -710,7 +905,9 @@ class CTraderFIXConnector:
         """Callback for market data updates."""
         symbol = data.get("symbol", "")
         if symbol:
-            self._latest_quotes[symbol] = data
+            # Try to reverse-map numeric ID back to symbol name for storage
+            symbol_name = self.symbol_map.get_symbol_name(symbol)
+            self._latest_quotes[symbol_name] = data
 
     def _on_execution(self, report: Dict):
         """Callback for execution reports."""
@@ -723,6 +920,35 @@ class CTraderFIXConnector:
         if client_id and exec_type in ("F", "8", "4", "C"):
             # F=Fill, 8=Rejected, 4=Canceled, C=Expired
             self._pending_executions[client_id] = report
+
+    def _on_session_reject(self, reject_info: Dict):
+        """
+        Handle 35=j (Session Reject / Business Message Reject).
+        
+        This fires when the broker rejects a message at the session level,
+        e.g., "Symbol(55) must be numeric. But it is XAUUSD".
+        
+        We mark ALL pending executions as failed so they don't timeout silently.
+        """
+        reason = reject_info.get("reason", "Session reject")
+        log.error(f"[TRADE] Session reject received — failing all pending orders: {reason}")
+        
+        # Fail all pending executions so they don't hang for 30s
+        for client_id in list(self._pending_executions.keys()):
+            if self._pending_executions[client_id] is None:
+                self._pending_executions[client_id] = {
+                    "exec_type": "8",  # Treat as rejected
+                    "order_id": client_id,
+                    "client_order_id": client_id,
+                    "order_status": "8",
+                    "symbol": "",
+                    "side": "",
+                    "quantity": "0",
+                    "price": "0",
+                    "avg_price": "0",
+                    "filled_qty": "0",
+                    "text": f"Session Reject: {reason}",
+                }
 
     async def execute_order(
         self,
@@ -753,6 +979,7 @@ class CTraderFIXConnector:
         self.trade_conn.send_new_order(
             symbol, side.upper(), volume, order_type, price, stop_loss, take_profit,
             client_order_id=client_id,
+            symbol_map=self.symbol_map,
         )
         log.info(f"[TRADE] Order sent: {side.upper()} {volume} {symbol} | ClientID={client_id}")
 
