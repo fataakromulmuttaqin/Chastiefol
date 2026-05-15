@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Chastiefol — XAUUSD Trading Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0d0e12;
+    --bg2:      #13151c;
+    --bg3:      #1a1d28;
+    --border:   #252836;
+    --text:     #e2e4ee;
+    --muted:    #6b7191;
+    --gold:     #f5c842;
+    --gold2:    #e8a800;
+    --green:    #2ecc71;
+    --red:      #e74c3c;
+    --blue:     #3b82f6;
+    --purple:   #8b5cf6;
+    --r:        8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-icon {
+    width: 32px; height: 32px; background: var(--gold);
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 700; color: #000;
+  }
+  .logo-text { font-size: 15px; font-weight: 600; letter-spacing: 0.5px; }
+  .logo-sub { font-size: 11px; color: var(--muted); }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .status-text { font-size: 11px; color: var(--green); }
+  .clock { color: var(--muted); font-size: 12px; }
+
+  main { padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* Price bar */
+  .price-bar {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 16px 20px; display: flex; align-items: center; gap: 32px;
+  }
+  .price-main { font-size: 36px; font-weight: 700; color: var(--gold); letter-spacing: -1px; }
+  .price-change { font-size: 14px; }
+  .price-meta { display: flex; flex-direction: column; gap: 2px; }
+  .price-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .price-val { font-size: 14px; font-weight: 600; }
+  .signal-badge {
+    margin-left: auto;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 15px; font-weight: 700; letter-spacing: 1px;
+  }
+  .badge-buy  { background: rgba(46,204,113,0.15); color: var(--green); border: 1px solid var(--green); }
+  .badge-sell { background: rgba(231,76,60,0.15);  color: var(--red);   border: 1px solid var(--red); }
+  .badge-hold { background: rgba(107,113,145,0.15);color: var(--muted); border: 1px solid var(--muted); }
+
+  /* Metrics row */
+  .metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .metric-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 14px 16px;
+  }
+  .metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+  .metric-value { font-size: 22px; font-weight: 700; }
+  .metric-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .gold-color { color: var(--gold); }
+  .blue-color { color: var(--blue); }
+
+  /* Main grid */
+  .grid-2 { display: grid; grid-template-columns: 1fr 340px; gap: 16px; }
+
+  /* Chart container */
+  .chart-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 16px;
+  }
+  .card-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .tf-tabs { display: flex; gap: 6px; }
+  .tf-tab {
+    padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); cursor: pointer; font-size: 11px;
+    font-family: inherit; transition: all 0.15s;
+  }
+  .tf-tab.active { background: var(--gold2); color: #000; border-color: var(--gold2); }
+
+  /* Signal panel */
+  .signal-panel {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .signal-header { display: flex; align-items: center; justify-content: space-between; }
+  .signal-direction {
+    font-size: 28px; font-weight: 700;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .confluence-bar-wrap { background: var(--bg3); border-radius: 4px; height: 6px; overflow: hidden; }
+  .confluence-bar { height: 100%; border-radius: 4px; background: var(--gold); transition: width 0.5s; }
+
+  .levels { display: flex; flex-direction: column; gap: 6px; }
+  .level-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; background: var(--bg3); border-radius: 6px;
+  }
+  .level-label { font-size: 11px; color: var(--muted); }
+  .level-val { font-weight: 700; font-size: 13px; }
+
+  .reasons-list { display: flex; flex-direction: column; gap: 5px; max-height: 160px; overflow-y: auto; }
+  .reason-item {
+    font-size: 11px; color: var(--muted);
+    padding: 5px 8px; background: var(--bg3); border-radius: 4px;
+    border-left: 2px solid var(--gold);
+  }
+
+  /* Trade log */
+  .trade-log {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 16px;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+  tbody td { padding: 8px 8px; font-size: 12px; border-bottom: 1px solid rgba(37,40,54,0.5); }
+  tbody tr:hover { background: var(--bg3); }
+  .win { color: var(--green); }
+  .loss { color: var(--red); }
+
+  /* Risk gauge */
+  .risk-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .gauge-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 14px;
+  }
+  .gauge-wrap { position: relative; height: 100px; }
+  .gauge-val { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); font-size: 22px; font-weight: 700; text-align: center; }
+  .gauge-sub { font-size: 10px; color: var(--muted); }
+
+  @media (max-width: 900px) {
+    .metrics { grid-template-columns: repeat(3, 1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
+    .risk-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">C</div>
+    <div>
+      <div class="logo-text">CHASTIEFOL</div>
+      <div class="logo-sub">XAUUSD Smart Agent</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="status-dot"></div>
+      <span class="status-text">LIVE PAPER</span>
+    </div>
+    <div class="clock" id="clock">--:--:-- UTC</div>
+  </div>
+</header>
+
+<main>
+  <!-- Price Bar -->
+  <div class="price-bar">
+    <div>
+      <div class="price-label">XAU / USD</div>
+      <div class="price-main" id="price">2,048.50</div>
+      <div class="price-change pos" id="price-change">▲ +12.30 (+0.60%)</div>
+    </div>
+    <div class="price-meta">
+      <div class="price-label">Bid</div>
+      <div class="price-val" id="bid">2,048.20</div>
+    </div>
+    <div class="price-meta">
+      <div class="price-label">Ask</div>
+      <div class="price-val" id="ask">2,048.80</div>
+    </div>
+    <div class="price-meta">
+      <div class="price-label">Spread</div>
+      <div class="price-val gold-color" id="spread">0.60</div>
+    </div>
+    <div class="price-meta">
+      <div class="price-label">ATR (14)</div>
+      <div class="price-val" id="atr">18.40</div>
+    </div>
+    <div class="price-meta">
+      <div class="price-label">Session</div>
+      <div class="price-val pos" id="session">London KZ</div>
+    </div>
+    <div class="signal-badge badge-buy" id="signal-badge">BUY</div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="metrics">
+    <div class="metric-card">
+      <div class="metric-label">Balance</div>
+      <div class="metric-value gold-color" id="balance">$10,000</div>
+      <div class="metric-sub">Starting capital</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Today P&L</div>
+      <div class="metric-value pos" id="daily-pnl">+$240.50</div>
+      <div class="metric-sub" id="daily-pct">+2.40%</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Win Rate</div>
+      <div class="metric-value blue-color" id="win-rate">67.3%</div>
+      <div class="metric-sub" id="wl-count">Win: 11 / Loss: 5</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Profit Factor</div>
+      <div class="metric-value pos" id="profit-factor">2.14</div>
+      <div class="metric-sub">Target: >1.5</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Max Drawdown</div>
+      <div class="metric-value" id="max-dd">3.20%</div>
+      <div class="metric-sub">Limit: 10%</div>
+    </div>
+  </div>
+
+  <!-- Chart + Signal Panel -->
+  <div class="grid-2">
+    <div class="chart-card">
+      <div class="card-title">
+        Equity Curve
+        <div class="tf-tabs">
+          <button class="tf-tab active">Today</button>
+          <button class="tf-tab">Week</button>
+          <button class="tf-tab">Month</button>
+        </div>
+      </div>
+      <canvas id="equity-chart" height="180"></canvas>
+    </div>
+
+    <div class="signal-panel">
+      <div class="card-title">Active Signal</div>
+      <div class="signal-header">
+        <div class="signal-direction pos" id="sig-direction">▲ BUY</div>
+        <div style="text-align:right">
+          <div class="price-label">Confidence</div>
+          <div style="font-size:20px;font-weight:700;color:var(--gold)" id="confidence">72%</div>
+        </div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <span class="metric-label">Confluence Score</span>
+          <span class="metric-label" id="conf-score">72 / 100</span>
+        </div>
+        <div class="confluence-bar-wrap">
+          <div class="confluence-bar" id="conf-bar" style="width:72%"></div>
+        </div>
+      </div>
+      <div class="levels">
+        <div class="level-row">
+          <span class="level-label">Entry</span>
+          <span class="level-val gold-color" id="lv-entry">2,048.50</span>
+        </div>
+        <div class="level-row">
+          <span class="level-label">Stop Loss</span>
+          <span class="level-val neg" id="lv-sl">2,021.00</span>
+        </div>
+        <div class="level-row">
+          <span class="level-label">Take Profit</span>
+          <span class="level-val pos" id="lv-tp">2,103.50</span>
+        </div>
+        <div class="level-row">
+          <span class="level-label">R:R Ratio</span>
+          <span class="level-val blue-color" id="lv-rr">1:2.00</span>
+        </div>
+        <div class="level-row">
+          <span class="level-label">Lot Size</span>
+          <span class="level-val" id="lv-lot">0.10 lots</span>
+        </div>
+      </div>
+      <div>
+        <div class="metric-label" style="margin-bottom:6px">Confluence Factors</div>
+        <div class="reasons-list" id="reasons-list">
+          <div class="reason-item">Structure BULLISH aligns with BUY</div>
+          <div class="reason-item">EMA 9/21/50 stack confirmed</div>
+          <div class="reason-item">RSI 52.3 in buy zone (40-65)</div>
+          <div class="reason-item">Price at bullish OB (2,041-2,047)</div>
+          <div class="reason-item">Active trading session (London/NY)</div>
+          <div class="reason-item">Break of Structure confirmed</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Risk Gauges + Trade Log -->
+  <div class="risk-row">
+    <div class="gauge-card">
+      <div class="card-title">Risk Dashboard</div>
+      <canvas id="risk-chart" height="100"></canvas>
+    </div>
+    <div class="gauge-card">
+      <div class="card-title">Session P&L Distribution</div>
+      <canvas id="pnl-dist-chart" height="100"></canvas>
+    </div>
+  </div>
+
+  <div class="trade-log">
+    <div class="card-title">Trade Log</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th><th>Direction</th><th>Entry</th><th>Exit</th>
+          <th>Lots</th><th>P&L</th><th>R:R</th><th>Outcome</th>
+        </tr>
+      </thead>
+      <tbody id="trade-tbody"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+// ── Simulated data engine ──────────────────────────
+const TRADES = [
+  { time:"08:12", dir:"BUY",  entry:2031.20, exit:2058.40, lot:0.10, pnl:+270.00, rr:2.1, outcome:"WIN" },
+  { time:"10:45", dir:"SELL", entry:2061.00, exit:2049.50, lot:0.08, pnl:+92.00,  rr:1.8, outcome:"WIN" },
+  { time:"13:22", dir:"BUY",  entry:2044.70, exit:2037.10, lot:0.10, pnl:-76.00,  rr:-0.8,outcome:"LOSS"},
+  { time:"14:55", dir:"SELL", entry:2052.30, exit:2038.90, lot:0.10, pnl:+134.00, rr:2.0, outcome:"WIN" },
+  { time:"15:40", dir:"BUY",  entry:2039.60, exit:2032.00, lot:0.08, pnl:-60.80,  rr:-0.9,outcome:"LOSS"},
+];
+
+function renderTradeLog() {
+  const tbody = document.getElementById("trade-tbody");
+  tbody.innerHTML = TRADES.map(t => `
+    <tr>
+      <td>${t.time}</td>
+      <td class="${t.dir==='BUY'?'pos':'neg'}">${t.dir}</td>
+      <td>${t.entry.toFixed(2)}</td>
+      <td>${t.exit.toFixed(2)}</td>
+      <td>${t.lot}</td>
+      <td class="${t.pnl>0?'win':'loss'}">${t.pnl>0?'+':''}$${Math.abs(t.pnl).toFixed(2)}</td>
+      <td>${t.rr > 0 ? '1:'+Math.abs(t.rr).toFixed(1) : t.rr.toFixed(1)}</td>
+      <td class="${t.outcome==='WIN'?'win':'loss'}">${t.outcome}</td>
+    </tr>
+  `).join("");
+}
+
+// ── Equity Curve Chart ─────────────────────────────
+function buildEquityChart() {
+  const base = 10000;
+  const labels = [], data = [base];
+  for (let h = 8; h <= 17; h++) {
+    for (let m of [0,15,30,45]) {
+      labels.push(`${h}:${String(m).padStart(2,'0')}`);
+    }
+  }
+  let v = base;
+  for (let i = 1; i < labels.length; i++) {
+    v += (Math.random() - 0.38) * 60;
+    data.push(Math.max(v, 9000));
+  }
+
+  const ctx = document.getElementById("equity-chart").getContext("2d");
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        data,
+        borderColor: "#f5c842",
+        borderWidth: 2,
+        fill: true,
+        backgroundColor: "rgba(245,200,66,0.08)",
+        tension: 0.4,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color:"#6b7191", font:{size:10}, maxTicksLimit:8 }, grid: { color:"rgba(37,40,54,0.6)" } },
+        y: {
+          ticks: { color:"#6b7191", font:{size:10}, callback: v => "$"+v.toLocaleString() },
+          grid: { color:"rgba(37,40,54,0.6)" },
+        }
+      }
+    }
+  });
+}
+
+// ── Risk Radar Chart ───────────────────────────────
+function buildRiskChart() {
+  const ctx = document.getElementById("risk-chart").getContext("2d");
+  new Chart(ctx, {
+    type: "radar",
+    data: {
+      labels: ["Win Rate","Profit Factor","R:R Ratio","Low DD","Sharpe"],
+      datasets: [{
+        label: "Strategy",
+        data: [67, 71, 80, 68, 60],
+        borderColor: "#f5c842",
+        backgroundColor: "rgba(245,200,66,0.1)",
+        borderWidth: 2,
+        pointBackgroundColor: "#f5c842",
+        pointRadius: 3,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        r: {
+          min: 0, max: 100,
+          grid: { color: "rgba(37,40,54,0.8)" },
+          angleLines: { color: "rgba(37,40,54,0.8)" },
+          ticks: { display: false },
+          pointLabels: { color: "#6b7191", font: { size: 10 } }
+        }
+      }
+    }
+  });
+}
+
+// ── P&L Distribution ──────────────────────────────
+function buildPnlDistChart() {
+  const pnls = TRADES.map(t => t.pnl);
+  const ctx  = document.getElementById("pnl-dist-chart").getContext("2d");
+  new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: TRADES.map(t => t.time),
+      datasets: [{
+        data: pnls,
+        backgroundColor: pnls.map(p => p > 0 ? "rgba(46,204,113,0.6)" : "rgba(231,76,60,0.6)"),
+        borderColor:     pnls.map(p => p > 0 ? "#2ecc71" : "#e74c3c"),
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color:"#6b7191", font:{size:10} }, grid: { display: false } },
+        y: { ticks: { color:"#6b7191", font:{size:10}, callback: v => "$"+v }, grid: { color:"rgba(37,40,54,0.6)" } }
+      }
+    }
+  });
+}
+
+// ── Live price simulation ──────────────────────────
+let currentPrice = 2048.50;
+let openPrice    = 2036.20;
+
+function updatePrice() {
+  const change    = (Math.random() - 0.5) * 1.5;
+  currentPrice   += change;
+  const spread    = 0.30 + Math.random() * 0.2;
+  const bid       = currentPrice - spread / 2;
+  const ask       = currentPrice + spread / 2;
+  const pxChange  = currentPrice - openPrice;
+  const pxPct     = (pxChange / openPrice * 100).toFixed(2);
+  const isPos     = pxChange >= 0;
+
+  document.getElementById("price").textContent    = currentPrice.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  document.getElementById("bid").textContent      = bid.toFixed(2);
+  document.getElementById("ask").textContent      = ask.toFixed(2);
+  document.getElementById("spread").textContent   = spread.toFixed(2);
+  document.getElementById("price-change").textContent =
+    `${isPos?"▲":"▼"} ${isPos?"+":""}${pxChange.toFixed(2)} (${isPos?"+":""}${pxPct}%)`;
+  document.getElementById("price-change").className = `price-change ${isPos?"pos":"neg"}`;
+
+  // Update signal level
+  document.getElementById("lv-entry").textContent = currentPrice.toFixed(2);
+}
+
+// ── Clock ──────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const utc = now.toISOString().substring(11, 19);
+  document.getElementById("clock").textContent = utc + " UTC";
+}
+
+// ── Session detection ──────────────────────────────
+function detectSession() {
+  const h = new Date().getUTCHours();
+  if (h >= 7  && h < 9)  { document.getElementById("session").textContent = "London KZ"; document.getElementById("session").className="price-val pos"; }
+  else if (h >= 12 && h < 14) { document.getElementById("session").textContent = "New York KZ"; document.getElementById("session").className="price-val pos"; }
+  else if (h >= 0  && h < 5)  { document.getElementById("session").textContent = "Asian Range"; document.getElementById("session").className="price-val"; }
+  else { document.getElementById("session").textContent = "Off-session"; document.getElementById("session").className="price-val muted"; }
+}
+
+// ── TF tabs ───────────────────────────────────────
+document.querySelectorAll(".tf-tab").forEach(btn => {
+  btn.addEventListener("click", function() {
+    document.querySelectorAll(".tf-tab").forEach(b => b.classList.remove("active"));
+    this.classList.add("active");
+  });
+});
+
+// ── Init ──────────────────────────────────────────
+renderTradeLog();
+buildEquityChart();
+buildRiskChart();
+buildPnlDistChart();
+updateClock();
+detectSession();
+setInterval(updatePrice, 800);
+setInterval(updateClock, 1000);
+setInterval(detectSession, 60000);
+</script>
+</body>
+</html>
