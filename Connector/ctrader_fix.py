@@ -93,7 +93,7 @@ class FIXMessage:
         return tag in self.fields
 
     def build(self, msg_type: str, seq_num: int, sender: str, target: str,
-              sender_sub: str = "") -> bytes:
+              sender_sub: str = "", target_sub: str = "") -> bytes:
         """
         Build a complete FIX 4.4 message with proper header and checksum.
         
@@ -113,11 +113,13 @@ class FIXMessage:
         body_parts.append(f"56={target}")
         if sender_sub:
             body_parts.append(f"50={sender_sub}")
+        if target_sub:
+            body_parts.append(f"57={target_sub}")
         body_parts.append(f"34={seq_num}")
         body_parts.append(f"52={self._utc_timestamp()}")
 
         for tag, value in self.fields.items():
-            if tag not in (8, 9, 10, 35, 49, 56, 50, 34, 52):
+            if tag not in (8, 9, 10, 35, 49, 56, 50, 57, 34, 52):
                 body_parts.append(f"{tag}={value}")
 
         # Body string: each field followed by SOH
@@ -289,6 +291,7 @@ class FIXConnection:
             self.config.sender_comp_id,
             self.config.target_comp_id,
             self.sender_sub_id,
+            self.sender_sub_id,  # TargetSubID = same as SenderSubID (QUOTE/TRADE)
         )
         log.info(f"[{self.connection_type}] Sending Logon... "
                  f"(Sender: {self.config.sender_comp_id}, "
@@ -327,6 +330,7 @@ class FIXConnection:
             self.config.sender_comp_id,
             self.config.target_comp_id,
             self.sender_sub_id,
+            self.sender_sub_id,
         )
         self._send_raw(raw)
         log.info(f"[{self.connection_type}] Logout sent.")
@@ -340,6 +344,7 @@ class FIXConnection:
             "0", self._next_seq(),
             self.config.sender_comp_id,
             self.config.target_comp_id,
+            self.sender_sub_id,
             self.sender_sub_id,
         )
         self._send_raw(raw)
@@ -395,6 +400,7 @@ class FIXConnection:
             self.config.sender_comp_id,
             self.config.target_comp_id,
             self.sender_sub_id,
+            self.sender_sub_id,
         )
         self._send_raw(raw)
         log.info(f"[TRADE] New order sent: {side} {quantity} {symbol} "
@@ -415,6 +421,7 @@ class FIXConnection:
             "F", self._next_seq(),
             self.config.sender_comp_id,
             self.config.target_comp_id,
+            self.sender_sub_id,
             self.sender_sub_id,
         )
         self._send_raw(raw)
@@ -442,6 +449,7 @@ class FIXConnection:
             self.config.sender_comp_id,
             self.config.target_comp_id,
             self.sender_sub_id,
+            self.sender_sub_id,
         )
         self._send_raw(raw)
         log.info(f"[PRICE] Subscribed to market data for {symbol}")
@@ -458,6 +466,7 @@ class FIXConnection:
             "V", self._next_seq(),
             self.config.sender_comp_id,
             self.config.target_comp_id,
+            self.sender_sub_id,
             self.sender_sub_id,
         )
         self._send_raw(raw)
