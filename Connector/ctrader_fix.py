@@ -718,9 +718,13 @@ class CTraderFIXConnector:
     def _on_execution(self, report: Dict):
         """Callback for execution reports."""
         self._execution_history.append(report)
-        # Store in pending dict for wait_for_execution
+        # Store in pending dict only for terminal states (Fill, Reject, Cancel)
+        # Ignore intermediate states like "0" (New/Acknowledged) to avoid
+        # premature pickup by execute_order() polling loop
+        exec_type = report.get("exec_type", "")
         client_id = report.get("client_order_id", "")
-        if client_id:
+        if client_id and exec_type in ("F", "8", "4", "C"):
+            # F=Fill, 8=Rejected, 4=Canceled, C=Expired
             self._pending_executions[client_id] = report
 
     async def execute_order(
@@ -732,7 +736,7 @@ class CTraderFIXConnector:
         price: float = 0.0,
         stop_loss: float = 0.0,
         take_profit: float = 0.0,
-        timeout: float = 10.0,
+        timeout: float = 30.0,
     ) -> Dict:
         """
         Send order and wait for broker execution confirmation.
@@ -779,6 +783,16 @@ class CTraderFIXConnector:
                         "execution_price": 0,
                         "filled_volume": 0,
                         "text": result.get("text", "Order rejected by broker"),
+                    }
+                else:
+                    # Other terminal states (4=Canceled, C=Expired)
+                    log.warning(f"[TRADE] Order terminal state: exec_type={exec_type} | {result.get('text', '')}")
+                    return {
+                        "success": False,
+                        "order_id": client_id,
+                        "execution_price": 0,
+                        "filled_volume": 0,
+                        "text": result.get("text", f"Order ended with exec_type={exec_type}"),
                     }
             await asyncio.sleep(0.1)
 
