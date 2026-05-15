@@ -534,6 +534,43 @@ docker run -d --env-file .env -p 8080:8080 chastiefol
 - [x] Database persistence (PostgreSQL)
 - [x] Automated daily reports
 - [x] Strategy optimizer (genetic algorithm)
+- [x] Email Alert Parser (free TradingView alternative)
+- [x] Soranoo Bridge (redundant signal source)
+- [x] Signal Router (deduplication across sources)
+- [x] TradingView WebSocket data feed (free, no API key)
+
+---
+
+## 📡 Data Feed Priority (All FREE)
+
+| Priority | Source | Accuracy | Setup |
+|----------|--------|----------|-------|
+| 1 (Primary) | **cTrader FIX Price Connection** | ⭐⭐⭐⭐⭐ | Demo account + FIX credentials |
+| 2 (Secondary) | **TradingView WebSocket** | ⭐⭐⭐⭐ | No key needed — auto-connect |
+| 3 (Tertiary) | **TwelveData REST** | ⭐⭐⭐ | Free API key (800 req/day) |
+
+Failover otomatis: jika source #1 disconnect, langsung switch ke #2, dst.
+
+---
+
+## 🆓 Signal Ingestion (Tanpa TradingView Premium)
+
+```
+┌────────────────────┐    ┌────────────────────┐
+│ 📧 Email Parser    │    │ 🔌 Soranoo Bridge  │
+│ (Gmail IMAP Poll)  │    │ (HTTP POST)        │
+└────────┬───────────┘    └────────┬───────────┘
+         │                          │
+         ▼                          ▼
+┌────────────────────────────────────────────────┐
+│       🔀 Signal Router (Deduplication)         │
+│   Same signal → only executed ONCE             │
+└────────────────────┬───────────────────────────┘
+                     ▼
+            Execution Pipeline
+```
+
+Atau jalankan **Autonomous Mode** — tidak perlu TradingView sama sekali.
 
 ---
 
