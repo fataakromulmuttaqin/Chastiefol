@@ -1,0 +1,38 @@
+{
+  "_comment": "Salin file ini ke user-config.json dan sesuaikan nilainya",
+
+  "symbol": "XAUUSD",
+  "dryRun": true,
+
+  "riskPerTradePct": 1.0,
+  "maxOpenTrades": 3,
+  "minFreeMarginUsd": 500,
+
+  "defaultLots": 0.01,
+  "maxLots": 0.10,
+
+  "screeningIntervalMin": 15,
+  "managementIntervalMin": 5,
+
+  "screeningModel": "google/gemini-2.5-flash-preview",
+  "managementModel": "google/gemini-2.5-flash-preview",
+  "generalModel": "google/gemini-2.5-flash-preview",
+
+  "technicalTimeframe": "H1",
+  "confirmTimeframe": "H4",
+
+  "minAtrPips": 8,
+  "maxSpreadPips": 0.5,
+
+  "allowedSessions": ["london", "newyork", "overlap"],
+
+  "takeProfitRatio": 2.0,
+  "stopLossPips": 20,
+  "trailingStopPips": 15,
+
+  "maxDailyLossPct": 3.0,
+  "maxWeeklyLossPct": 6.0,
+
+  "telegramReportAfterEveryManageCycle": true,
+  "telegramReportAfterEveryScreenCycle": true
+}
