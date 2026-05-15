@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Chastiefol — Autonomous XAUUSD Trading Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Space+Mono:wght@400;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,400&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg0:#0A0A0F;
+  --bg1:#12121A;
+  --bg2:#1A1A26;
+  --bg3:#22223A;
+  --gold:#F5C518;
+  --gold-l:#FFD966;
+  --gold-dim:#B8921A;
+  --green:#00D084;
+  --red:#FF4757;
+  --blue:#3B82F6;
+  --text:#FFFFFF;
+  --text2:#A0A0B0;
+  --text3:#606070;
+  --border:#2A2A3A;
+  --border-h:#3A3A5A;
+  --ff:'Syne',sans-serif;
+  --fm:'Space Mono',monospace;
+  --fb:'DM Sans',sans-serif;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg0);color:var(--text);font-family:var(--fb);font-size:16px;line-height:1.6;overflow-x:hidden}
+
+/* scrollbar */
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:var(--bg1)}::-webkit-scrollbar-thumb{background:var(--gold-dim);border-radius:2px}
+
+/* NAV */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(10,10,15,.85);backdrop-filter:blur(14px);border-bottom:1px solid var(--border);height:60px;display:flex;align-items:center;padding:0 32px}
+.nav-inner{width:100%;max-width:1280px;margin:0 auto;display:flex;align-items:center;gap:24px}
+.logo{font-family:var(--ff);font-weight:800;font-size:18px;color:var(--gold);letter-spacing:.04em;cursor:pointer;flex-shrink:0}
+.logo span{color:var(--text2);font-weight:400;font-size:12px;margin-left:8px;letter-spacing:.08em}
+.nav-links{display:flex;gap:4px;align-items:center;margin:0 auto}
+.nav-link{padding:6px 12px;font-size:13px;color:var(--text2);cursor:pointer;border-radius:6px;font-family:var(--fb);transition:color .15s,background .15s;border:none;background:none}
+.nav-link:hover,.nav-link.active{color:var(--gold);background:rgba(245,197,24,.06)}
+.status-badge{display:flex;align-items:center;gap:7px;background:rgba(0,208,132,.08);border:1px solid rgba(0,208,132,.25);border-radius:20px;padding:4px 12px;font-size:12px;font-family:var(--fm);color:var(--green);flex-shrink:0}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse-dot 2s infinite}
+@keyframes pulse-dot{0%,100%{opacity:1;box-shadow:0 0 6px var(--green)}50%{opacity:.6;box-shadow:0 0 12px var(--green)}}
+
+/* PAGES */
+.page{display:none;padding-top:60px;min-height:100vh}
+.page.active{display:block}
+
+/* HERO */
+.hero{position:relative;overflow:hidden;min-height:92vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:80px 24px}
+.hero-grid{position:absolute;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:64px 64px;opacity:.35;pointer-events:none}
+.hero-glow{position:absolute;top:20%;left:50%;transform:translateX(-50%);width:600px;height:400px;background:radial-gradient(ellipse,rgba(245,197,24,.08) 0%,transparent 70%);pointer-events:none}
+.hero-content{position:relative;max-width:820px}
+.hero-tag{display:inline-flex;align-items:center;gap:8px;background:rgba(245,197,24,.06);border:1px solid rgba(245,197,24,.2);border-radius:20px;padding:5px 16px;font-size:12px;font-family:var(--fm);color:var(--gold);margin-bottom:32px;letter-spacing:.06em}
+h1{font-family:var(--ff);font-weight:800;font-size:clamp(38px,5vw,72px);line-height:1.1;letter-spacing:-.02em;margin-bottom:24px}
+h1 em{font-style:normal;color:var(--gold)}
+.hero-sub{font-size:18px;color:var(--text2);max-width:580px;margin:0 auto 40px;line-height:1.7}
+.cta-row{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.btn{padding:12px 28px;border-radius:8px;font-size:15px;font-weight:500;cursor:pointer;transition:all .15s;border:none;font-family:var(--fb)}
+.btn-primary{background:var(--gold);color:#0A0A0F;font-weight:700}
+.btn-primary:hover{background:var(--gold-l);transform:translateY(-1px)}
+.btn-secondary{background:transparent;color:var(--gold);border:1px solid var(--gold);padding:11px 27px}
+.btn-secondary:hover{background:rgba(245,197,24,.08)}
+
+/* STATS BAR */
+.stats-bar{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--bg1)}
+.stat-item{padding:28px 32px;text-align:center;border-right:1px solid var(--border)}
+.stat-item:last-child{border-right:none}
+.stat-val{font-family:var(--ff);font-size:32px;font-weight:700;color:var(--gold);letter-spacing:-.02em}
+.stat-lbl{font-size:13px;color:var(--text3);margin-top:4px;font-family:var(--fm);letter-spacing:.04em}
+
+/* SECTION */
+.section{padding:80px 32px;max-width:1280px;margin:0 auto}
+.section-tag{font-family:var(--fm);font-size:11px;color:var(--gold);letter-spacing:.1em;text-transform:uppercase;margin-bottom:16px}
+h2{font-family:var(--ff);font-size:clamp(28px,3.5vw,44px);font-weight:700;line-height:1.2;letter-spacing:-.01em;margin-bottom:16px}
+h3{font-family:var(--ff);font-size:20px;font-weight:600;margin-bottom:12px}
+.section-sub{color:var(--text2);font-size:17px;max-width:600px;line-height:1.7;margin-bottom:56px}
+
+/* FEATURE GRID */
+.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:16px}
+.card{background:var(--bg1);border:1px solid var(--border);border-radius:12px;padding:28px;transition:border-color .2s,box-shadow .2s}
+.card:hover{border-color:rgba(245,197,24,.35);box-shadow:0 0 32px rgba(245,197,24,.06)}
+.card-icon{width:44px;height:44px;border-radius:10px;background:rgba(245,197,24,.1);border:1px solid rgba(245,197,24,.2);display:flex;align-items:center;justify-content:center;margin-bottom:20px;font-size:22px}
+.card h3{font-size:18px;margin-bottom:8px}
+.card p{color:var(--text2);font-size:15px;line-height:1.6}
+.tag-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:16px}
+.tag{padding:3px 10px;background:rgba(245,197,24,.08);border:1px solid rgba(245,197,24,.15);border-radius:4px;font-size:12px;color:var(--gold);font-family:var(--fm)}
+
+/* ARCHITECTURE */
+.arch-diagram{background:var(--bg1);border:1px solid var(--border);border-radius:12px;padding:40px;margin-top:16px;font-family:var(--fm);font-size:13px;overflow-x:auto}
+.arch-row{display:flex;gap:12px;justify-content:center;margin-bottom:12px;flex-wrap:wrap}
+.arch-box{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 18px;text-align:center;min-width:140px}
+.arch-box.gold{border-color:rgba(245,197,24,.4);background:rgba(245,197,24,.06);color:var(--gold)}
+.arch-box.green{border-color:rgba(0,208,132,.3);background:rgba(0,208,132,.05);color:var(--green)}
+.arch-box.blue{border-color:rgba(59,130,246,.3);background:rgba(59,130,246,.05);color:var(--blue)}
+.arch-arrow{color:var(--text3);font-size:18px;display:flex;align-items:center;justify-content:center}
+.arch-sub{font-size:11px;color:var(--text3);margin-top:3px}
+.arch-sep{text-align:center;color:var(--text3);margin:8px 0;font-size:20px}
+
+/* CODE BLOCK */
+.code-block{background:var(--bg1);border:1px solid var(--border);border-radius:8px;padding:20px 24px;font-family:var(--fm);font-size:13px;line-height:1.8;overflow-x:auto;color:#c8d8e8;position:relative;margin:16px 0}
+.code-block .kw{color:var(--gold)}
+.code-block .str{color:var(--green)}
+.code-block .cmt{color:var(--text3)}
+.code-block .num{color:#FF9F43}
+.code-hdr{background:var(--bg2);border:1px solid var(--border);border-bottom:none;border-radius:8px 8px 0 0;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;font-family:var(--fm);font-size:12px;color:var(--text3)}
+.code-hdr + .code-block{border-radius:0 0 8px 8px;margin-top:0}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-family:var(--fm)}
+.badge-post{background:rgba(0,208,132,.12);color:var(--green);border:1px solid rgba(0,208,132,.25)}
+.badge-get{background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.25)}
+
+/* TABLE */
+.tbl-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border);margin:16px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{background:var(--bg2);padding:12px 20px;text-align:left;font-family:var(--fm);font-size:12px;color:var(--text2);font-weight:400;letter-spacing:.04em;border-bottom:1px solid var(--border)}
+td{padding:12px 20px;border-bottom:1px solid rgba(42,42,58,.5);color:var(--text2)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(245,197,24,.03);color:var(--text)}
+
+/* ENV CONFIG */
+.env-section{margin-bottom:32px}
+.env-group{background:var(--bg1);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:8px}
+.env-group-hdr{background:var(--bg2);padding:10px 20px;font-family:var(--fm);font-size:12px;color:var(--gold);letter-spacing:.06em;border-bottom:1px solid var(--border)}
+.env-row{display:grid;grid-template-columns:220px 1fr;gap:16px;padding:10px 20px;border-bottom:1px solid rgba(42,42,58,.4)}
+.env-row:last-child{border-bottom:none}
+.env-key{font-family:var(--fm);font-size:13px;color:var(--text)}
+.env-val{font-family:var(--fm);font-size:13px;color:var(--gold-dim)}
+.env-desc{font-size:12px;color:var(--text3);margin-top:2px}
+
+/* DASHBOARD */
+.metrics-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
+.metric-card{background:var(--bg1);border:1px solid var(--border);border-radius:12px;padding:20px}
+.metric-lbl{font-size:12px;color:var(--text3);font-family:var(--fm);letter-spacing:.04em;margin-bottom:8px}
+.metric-val{font-family:var(--ff);font-size:28px;font-weight:700;line-height:1}
+.metric-val.gold{color:var(--gold)}
+.metric-val.green{color:var(--green)}
+.metric-val.red{color:var(--red)}
+.metric-sub{font-size:12px;color:var(--text3);margin-top:6px}
+
+/* EQUITY CHART */
+.chart-wrap{background:var(--bg1);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:24px}
+.chart-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.chart-title{font-family:var(--ff);font-weight:600;font-size:16px}
+.chart-legend{display:flex;gap:20px;font-size:13px;color:var(--text2)}
+.legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px}
+canvas{display:block}
+
+/* TRADES TABLE */
+.trades-hdr{font-family:var(--ff);font-weight:600;font-size:17px;margin-bottom:14px;display:flex;align-items:center;gap:10px}
+.pnl-pos{color:var(--green)}
+.pnl-neg{color:var(--red)}
+.status-pill{padding:2px 9px;border-radius:10px;font-size:11px;font-family:var(--fm)}
+.status-filled{background:rgba(0,208,132,.12);color:var(--green);border:1px solid rgba(0,208,132,.25)}
+.status-rejected{background:rgba(255,71,87,.12);color:var(--red);border:1px solid rgba(255,71,87,.25)}
+.status-pending{background:rgba(245,197,24,.1);color:var(--gold);border:1px solid rgba(245,197,24,.2)}
+.side-buy{color:var(--green);font-weight:600;font-family:var(--fm)}
+.side-sell{color:var(--red);font-weight:600;font-family:var(--fm)}
+.component-status{background:var(--bg1);border:1px solid var(--border);border-radius:12px;padding:24px;margin-top:24px}
+
+/* SESSIONS */
+.session-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.session-card{background:var(--bg1);border:1px solid var(--border);border-radius:12px;padding:24px}
+.session-card.active-sess{border-color:rgba(245,197,24,.4);background:rgba(245,197,24,.03)}
+.session-time{font-family:var(--fm);font-size:13px;color:var(--text2);margin-bottom:8px}
+.session-name{font-family:var(--ff);font-weight:600;font-size:18px;margin-bottom:10px}
+.prob-bar{height:6px;background:var(--bg2);border-radius:3px;overflow:hidden;margin-top:12px}
+.prob-fill{height:100%;border-radius:3px;background:var(--gold)}
+
+/* TELEGRAM PREVIEW */
+.tg-wrap{background:#1E1E1E;border-radius:16px;padding:24px;max-width:480px;font-family:'Space Mono',monospace;font-size:13px;line-height:1.7}
+.tg-msg{background:#2A2A2A;border-radius:12px 12px 12px 4px;padding:16px;margin-bottom:12px;border-left:3px solid var(--gold)}
+.tg-hdr{color:var(--gold);font-weight:700;font-size:14px;margin-bottom:6px}
+.tg-sep{border-top:1px solid #3A3A3A;margin:8px 0}
+.tg-line{color:#CCD;margin:2px 0}
+.tg-pos{color:var(--green)}
+.tg-neg{color:var(--red)}
+.tg-muted{color:#888}
+
+/* SETUP GUIDE */
+.steps{display:flex;flex-direction:column;gap:0}
+.step{display:grid;grid-template-columns:48px 1fr;gap:20px;padding:28px 0;border-bottom:1px solid var(--border)}
+.step:last-child{border-bottom:none}
+.step-num{width:40px;height:40px;background:rgba(245,197,24,.1);border:1px solid rgba(245,197,24,.25);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--fm);color:var(--gold);font-weight:700;font-size:14px;flex-shrink:0}
+.step-content h3{font-size:17px;margin-bottom:8px}
+.step-content p{color:var(--text2);font-size:15px;margin-bottom:8px}
+.inline-code{background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-family:var(--fm);font-size:13px;color:var(--gold-l)}
+
+/* TROUBLESHOOTING */
+.trouble-item{background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:12px;display:grid;grid-template-columns:1fr auto;gap:16px;align-items:start}
+.trouble-issue{font-weight:600;color:var(--text);margin-bottom:6px}
+.trouble-cause{font-size:13px;color:var(--text3);margin-bottom:4px}
+.trouble-fix{font-size:13px;color:var(--green)}
+.trouble-badge{background:rgba(255,71,87,.08);color:var(--red);border:1px solid rgba(255,71,87,.2);padding:3px 10px;border-radius:6px;font-size:12px;font-family:var(--fm);white-space:nowrap;height:fit-content}
+
+/* DATA MODELS */
+.model-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.model-card{background:var(--bg1);border:1px solid var(--border);border-radius:12px;padding:0;overflow:hidden}
+.model-title{padding:14px 20px;background:var(--bg2);border-bottom:1px solid var(--border);font-family:var(--fm);font-size:13px;color:var(--gold);font-weight:700}
+.model-fields{padding:4px 0}
+.model-field{display:grid;grid-template-columns:140px 80px 1fr;padding:8px 20px;border-bottom:1px solid rgba(42,42,58,.4);font-size:13px}
+.model-field:last-child{border-bottom:none}
+.field-name{font-family:var(--fm);color:var(--text)}
+.field-type{color:var(--blue);font-family:var(--fm);font-size:12px}
+.field-desc{color:var(--text3);font-size:12px}
+
+/* FOOTER */
+footer{background:var(--bg1);border-top:1px solid var(--border);padding:40px 32px;margin-top:80px;text-align:center}
+footer p{color:var(--text3);font-size:14px}
+footer span{color:var(--gold)}
+
+/* RESPONSIVE */
+@media(max-width:768px){
+  .feature-grid,.metrics-grid{grid-template-columns:1fr}
+  .stats-bar{grid-template-columns:1fr 1fr}
+  .stat-item{border-right:none;border-bottom:1px solid var(--border)}
+  .model-grid,.session-grid{grid-template-columns:1fr}
+  nav{padding:0 16px}
+  .section{padding:60px 16px}
+  .nav-links{display:none}
+}
+
+/* ANIMATIONS */
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.hero-content>*{animation:fadeUp .6s ease both}
+.hero-tag{animation-delay:.1s}
+h1{animation-delay:.2s}
+.hero-sub{animation-delay:.3s}
+.cta-row{animation-delay:.4s}
+
+.glow-text{background:linear-gradient(135deg,var(--gold) 0%,var(--gold-l) 50%,var(--gold) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+
+/* LIVE PRICE TICKER */
+.price-ticker{display:flex;align-items:center;gap:12px;padding:12px 24px;background:var(--bg1);border-bottom:1px solid var(--border);font-family:var(--fm);font-size:13px;overflow:hidden;white-space:nowrap}
+.price-ticker span{color:var(--text2);margin-right:8px}
+.price-val{color:var(--gold);font-size:16px;font-weight:700}
+.price-change{color:var(--green);font-size:12px}
+
+/* SIGNAL BADGE */
+.signal-conf{display:inline-flex;align-items:center;gap:4px}
+.conf-bar{width:48px;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.conf-fill{height:100%;background:var(--gold);border-radius:2px}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-inner">
+    <div class="logo" onclick="showPage('home')">CHASTIEFOL <span>v1.0</span></div>
+    <div class="nav-links">
+      <button class="nav-link active" onclick="showPage('home')">Home</button>
+      <button class="nav-link" onclick="showPage('features')">Features</button>
+      <button class="nav-link" onclick="showPage('architecture')">Architecture</button>
+      <button class="nav-link" onclick="showPage('api')">API</button>
+      <button class="nav-link" onclick="showPage('config')">Config</button>
+      <button class="nav-link" onclick="showPage('models')">Data Models</button>
+      <button class="nav-link" onclick="showPage('telegram')">Telegram</button>
+      <button class="nav-link" onclick="showPage('dashboard')">Dashboard</button>
+      <button class="nav-link" onclick="showPage('sessions')">Sessions</button>
+      <button class="nav-link" onclick="showPage('setup')">Setup</button>
+      <button class="nav-link" onclick="showPage('troubleshoot')">Troubleshooting</button>
+    </div>
+    <div class="status-badge"><div class="dot"></div>ONLINE · 99.8%</div>
+  </div>
+</nav>
+
+<!-- PAGE: HOME -->
+<div id="page-home" class="page active">
+  <div class="price-ticker">
+    <span>XAUUSD</span>
+    <span class="price-val" id="live-price">4,540.00</span>
+    <span class="price-change" id="live-change">▲ +0.42%</span>
+    <span style="color:var(--text3);margin-left:20px">Session:</span>
+    <span id="session-name" style="color:var(--gold)">London Open Killzone</span>
+    <span style="color:var(--text3);margin-left:auto">Last signal: BUY @ 4525.50 · Confidence 78%</span>
+  </div>
+  <div class="hero">
+    <div class="hero-grid"></div>
+    <div class="hero-glow"></div>
+    <div class="hero-content">
+      <div class="hero-tag">⚡ AUTONOMOUS TRADING AGENT · XAUUSD (GOLD)</div>
+      <h1><em class="glow-text">Chastiefol</em><br>Trades Gold. Autonomously.</h1>
+      <p class="hero-sub">Professional-grade gold trading with Smart Money Concepts, technical confluence analysis, and multi-broker execution. No manual intervention required.</p>
+      <div class="cta-row">
+        <button class="btn btn-primary" onclick="showPage('dashboard')">View Dashboard</button>
+        <button class="btn btn-secondary" onclick="showPage('setup')">Setup Guide</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat-item"><div class="stat-val">1,247</div><div class="stat-lbl">TOTAL TRADES</div></div>
+    <div class="stat-item"><div class="stat-val" style="color:var(--green)">68.4%</div><div class="stat-lbl">WIN RATE</div></div>
+    <div class="stat-item"><div class="stat-val">2.14</div><div class="stat-lbl">AVG R:R RATIO</div></div>
+    <div class="stat-item"><div class="stat-val">99.8%</div><div class="stat-lbl">UPTIME</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-tag">CAPABILITIES</div>
+    <h2>Everything you need for<br>autonomous gold trading</h2>
+    <p class="section-sub">Chastiefol combines institutional-grade SMC analysis with automated execution across multiple broker interfaces.</p>
+
+    <div class="feature-grid">
+      <div class="card">
+        <div class="card-icon">🧠</div>
+        <h3>Smart Analysis Engine</h3>
+        <p>Multi-confluence scoring combining Parabolic SAR, EMA stack, RSI, MACD, Bollinger Bands, and ATR-based SL/TP calculation. Minimum 55/100 confidence gate before execution.</p>
+        <div class="tag-list">
+          <span class="tag">PSAR</span><span class="tag">EMA 20/50/100/200</span><span class="tag">SMC</span><span class="tag">Order Blocks</span><span class="tag">FVG</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">⚡</div>
+        <h3>Multi-Execution Methods</h3>
+        <p>Execute via cTrader MCP (REST/JSON-RPC), cTrader FIX 4.4 (TCP/SSL) for institutional-grade speed, or Paper mode for simulation and backtesting. Switchable at runtime.</p>
+        <div class="tag-list">
+          <span class="tag">cTrader MCP</span><span class="tag">FIX 4.4</span><span class="tag">Paper Mode</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">🛡️</div>
+        <h3>Advanced Risk Management</h3>
+        <p>5-stage drawdown circuit breaker, Kelly/Fixed/Volatility position sizing, session-based filters for London and NY killzones, trailing SL, breakeven, and partial TP at 1:1 R:R.</p>
+        <div class="tag-list">
+          <span class="tag">Kelly Sizing</span><span class="tag">Drawdown Guard</span><span class="tag">Trail SL</span><span class="tag">Breakeven</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">📡</div>
+        <h3>Dual Signal Sources</h3>
+        <p>Receive signals from TradingView via HMAC-authenticated webhooks, or run fully autonomous self-scanning every 60 seconds. Hybrid mode runs both simultaneously.</p>
+        <div class="tag-list">
+          <span class="tag">TradingView Webhook</span><span class="tag">Autonomous 60s</span><span class="tag">Hybrid Mode</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">🤖</div>
+        <h3>ReAct AI Agent</h3>
+        <p>LLM-powered reasoning loop using OpenRouter/GroQ/OpenAI for complex market decisions. Customizable provider, temperature, and max reasoning steps via environment config.</p>
+        <div class="tag-list">
+          <span class="tag">OpenRouter</span><span class="tag">GroQ</span><span class="tag">ReAct Loop</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">📲</div>
+        <h3>Telegram Notifications</h3>
+        <p>Real-time alerts for every signal, execution, trade close, drawdown breach, and system event. Rich formatted messages with full trade details and P&L calculations.</p>
+        <div class="tag-list">
+          <span class="tag">Trade Alerts</span><span class="tag">Risk Alerts</span><span class="tag">System Status</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="background:var(--bg1);border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:60px 32px">
+    <div style="max-width:1280px;margin:0 auto">
+      <div class="section-tag">TECH STACK</div>
+      <h2>Built on proven infrastructure</h2>
+      <div class="tbl-wrap" style="margin-top:32px">
+        <table>
+          <thead><tr><th>Component</th><th>Technology</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--text)">Main Agent</td><td style="font-family:var(--fm);color:var(--gold)">Python 3.10+ (asyncio)</td><td>Event-driven async core</td></tr>
+            <tr><td style="color:var(--text)">Webhook Server</td><td style="font-family:var(--fm);color:var(--gold)">aiohttp (port 8080)</td><td>Async HTTP, HMAC auth</td></tr>
+            <tr><td style="color:var(--text)">Frontend</td><td style="font-family:var(--fm);color:var(--gold)">React 18 + Vite</td><td>Port 3000</td></tr>
+            <tr><td style="color:var(--text)">Data Providers</td><td style="font-family:var(--fm);color:var(--gold)">TwelveData · AlphaVantage · GoldAPI</td><td>Multi-source fallback</td></tr>
+            <tr><td style="color:var(--text)">Broker</td><td style="font-family:var(--fm);color:var(--gold)">cTrader MCP + FIX 4.4</td><td>REST + TCP/SSL</td></tr>
+            <tr><td style="color:var(--text)">Notifications</td><td style="font-family:var(--fm);color:var(--gold)">Telegram Bot API</td><td>Rich formatted alerts</td></tr>
+            <tr><td style="color:var(--text)">AI Agent</td><td style="font-family:var(--fm);color:var(--gold)">ReAct loop (OpenRouter/GroQ)</td><td>max_steps configurable</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <footer><p>CHASTIEFOL — Autonomous XAUUSD Trading Agent · Built with <span>♦</span> · <span>v1.0.0</span></p><p style="margin-top:8px;font-size:12px;color:var(--text3)">For educational & research purposes. Trading involves risk.</p></footer>
+</div>
+
+<!-- PAGE: FEATURES -->
+<div id="page-features" class="page">
+  <div class="section">
+    <div class="section-tag">FEATURES</div>
+    <h2>Full feature breakdown</h2>
+    <p class="section-sub">Every system component documented in detail.</p>
+
+    <h3 style="color:var(--gold);margin-bottom:20px">Analysis Engine</h3>
+    <div class="feature-grid" style="margin-bottom:48px">
+      <div class="card"><div class="card-icon">↗️</div><h3>Parabolic SAR Flip</h3><p>Detects directional flip events on configurable timeframes. SAR value reported in each signal for transparency.</p></div>
+      <div class="card"><div class="card-icon">📈</div><h3>EMA Stack Alignment</h3><p>Checks full 20/50/100/200 EMA alignment — all four must be aligned in the trade direction for maximum confluence score contribution.</p></div>
+      <div class="card"><div class="card-icon">🏗️</div><h3>Market Structure</h3><p>BOS (Break of Structure) and CHoCH (Change of Character) detection using SMC methodology. Identifies macro trend direction shifts.</p></div>
+      <div class="card"><div class="card-icon">📦</div><h3>Order Blocks</h3><p>Identifies institutional order block zones from prior consolidation/impulse moves. Price proximity to OBs increases confluence score.</p></div>
+      <div class="card"><div class="card-icon">🌊</div><h3>Fair Value Gaps</h3><p>Detects FVGs (imbalance zones) on H1/H4 timeframes. FVG overlap with entry price adds to confluence scoring system.</p></div>
+      <div class="card"><div class="card-icon">📊</div><h3>Confluence Scoring</h3><p>Proprietary 0–100 score system. Minimum 55/100 required before execution. Each technical factor contributes proportionally.</p></div>
+    </div>
+
+    <h3 style="color:var(--gold);margin-bottom:20px">Signal Modes</h3>
+    <div class="feature-grid" style="margin-bottom:48px">
+      <div class="card"><div class="card-icon">🔗</div><h3>Webhook Mode</h3><p>Receives signals from TradingView or any HMAC-authenticated source via POST /webhook. Processes immediately upon receipt.</p></div>
+      <div class="card"><div class="card-icon">🔄</div><h3>Autonomous Mode</h3><p>Self-scanning loop running every 60 seconds (configurable). Full analysis engine runs on schedule without external triggers.</p></div>
+      <div class="card"><div class="card-icon">⚡</div><h3>Hybrid Mode</h3><p>Both webhook and autonomous modes run simultaneously. Webhook signals override autonomous if received within the same scan window.</p></div>
+    </div>
+
+    <h3 style="color:var(--gold);margin-bottom:20px">Risk Management</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Feature</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td style="color:var(--text)">Risk per trade</td><td style="font-family:var(--fm);color:var(--gold)">1.0%</td><td>Configurable via RISK_PCT env variable</td></tr>
+          <tr><td style="color:var(--text)">Max risk</td><td style="font-family:var(--fm);color:var(--gold)">2.0%</td><td>Hard cap, never exceeded regardless of Kelly output</td></tr>
+          <tr><td style="color:var(--text)">Daily loss limit</td><td style="font-family:var(--fm);color:var(--gold)">3.0%</td><td>Triggers trading halt for remainder of session</td></tr>
+          <tr><td style="color:var(--text)">Max drawdown</td><td style="font-family:var(--fm);color:var(--gold)">10.0%</td><td>5-stage circuit breaker escalation</td></tr>
+          <tr><td style="color:var(--text)">Max open trades</td><td style="font-family:var(--fm);color:var(--gold)">2</td><td>Concurrent position limit</td></tr>
+          <tr><td style="color:var(--text)">Breakeven</td><td style="font-family:var(--fm);color:var(--gold)">1:1 R:R</td><td>SL moves to entry when 1:1 achieved</td></tr>
+          <tr><td style="color:var(--text)">Partial TP</td><td style="font-family:var(--fm);color:var(--gold)">50% at 1:1</td><td>Half position closed at 1:1, rest runs to TP</td></tr>
+          <tr><td style="color:var(--text)">Trailing SL</td><td style="font-family:var(--fm);color:var(--gold)">ATR-based</td><td>Follows price using ATR multiplier</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Features Reference</span></p></footer>
+</div>
+
+<!-- PAGE: ARCHITECTURE -->
+<div id="page-architecture" class="page">
+  <div class="section">
+    <div class="section-tag">ARCHITECTURE</div>
+    <h2>System architecture</h2>
+    <p class="section-sub">Full component map with data flow from signal ingestion to execution and notification.</p>
+
+    <div class="arch-diagram">
+      <div style="text-align:center;margin-bottom:24px;font-family:var(--ff);font-size:18px;color:var(--gold);letter-spacing:.04em">CHASTIEFOL AGENT — chastiefol_main.py</div>
+
+      <div class="arch-row">
+        <div class="arch-box blue"><div style="color:var(--blue)">TradingView Webhook</div><div class="arch-sub">Port 8080 · aiohttp</div></div>
+        <div class="arch-box gold"><div>Autonomous Scanner</div><div class="arch-sub">60s loop</div></div>
+        <div class="arch-box blue"><div style="color:var(--blue)">cTrader Broker</div><div class="arch-sub">MCP / FIX</div></div>
+      </div>
+      <div class="arch-sep">▼ &nbsp; &nbsp; ▼ &nbsp; &nbsp; ▼</div>
+
+      <div class="arch-row">
+        <div class="arch-box gold" style="min-width:600px">
+          <div>SIGNAL ROUTER + RISK ENGINE</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px">
+            <div class="arch-box"><div style="color:var(--text)">Webhook Listener</div><div class="arch-sub">aiohttp</div></div>
+            <div class="arch-box"><div style="color:var(--text)">Drawdown Guard</div><div class="arch-sub">5-stage breaker</div></div>
+            <div class="arch-box"><div style="color:var(--text)">Position Sizer</div><div class="arch-sub">Kelly / Fixed</div></div>
+            <div class="arch-box"><div style="color:var(--text)">Session Filter</div><div class="arch-sub">London / NY</div></div>
+            <div class="arch-box"><div style="color:var(--text)">Trade Manager</div><div class="arch-sub">Trail / BE / TP</div></div>
+            <div class="arch-box"><div style="color:var(--text)">Price Validator</div><div class="arch-sub">FIX sanity check</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="arch-sep">▼</div>
+
+      <div class="arch-row">
+        <div class="arch-box green"><div style="color:var(--green)">cTrader MCP</div><div class="arch-sub">REST/JSON-RPC</div></div>
+        <div class="arch-box green"><div style="color:var(--green)">cTrader FIX 4.4</div><div class="arch-sub">TCP/SSL</div></div>
+        <div class="arch-box"><div>Paper Mode</div><div class="arch-sub">Simulated fills</div></div>
+      </div>
+      <div class="arch-sep">▼ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ▼</div>
+
+      <div class="arch-row">
+        <div class="arch-box blue"><div style="color:var(--blue)">Telegram Notifier</div><div class="arch-sub">Bot alerts</div></div>
+        <div class="arch-box gold"><div>Dashboard</div><div class="arch-sub">React + Vite · Port 3000</div></div>
+      </div>
+
+      <div style="margin-top:32px;border-top:1px solid var(--border);padding-top:24px">
+        <div style="color:var(--gold);font-family:var(--fm);font-size:12px;letter-spacing:.06em;margin-bottom:16px">DATA LAYER</div>
+        <div class="arch-row">
+          <div class="arch-box"><div>DataFeed Manager</div><div class="arch-sub">TwelveData · AlphaVantage · GoldAPI</div></div>
+          <div class="arch-arrow">→</div>
+          <div class="arch-box"><div>Analysis Engine</div><div class="arch-sub">ChastieFol Agent</div></div>
+          <div class="arch-arrow">→</div>
+          <div class="arch-box"><div>Risk Manager</div><div class="arch-sub">PositionSizer · DrawdownGuard</div></div>
+        </div>
+      </div>
+    </div>
+
+    <h2 style="margin-top:64px;margin-bottom:16px">Data flow</h2>
+    <div style="display:flex;flex-direction:column;gap:0">
+      <div style="display:grid;grid-template-columns:32px 1fr;gap:16px;padding:20px 0;border-bottom:1px solid var(--border);align-items:start">
+        <div style="width:28px;height:28px;background:rgba(245,197,24,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--fm);color:var(--gold);font-size:12px;font-weight:700">1</div>
+        <div><strong style="font-family:var(--ff)">Data Feed → Analysis Engine → Signal Generation</strong><br><span style="color:var(--text2);font-size:14px">Multi-provider OHLCV data consumed by the analysis engine. Technical indicators and SMC patterns computed. Confluence score generated per bar.</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:32px 1fr;gap:16px;padding:20px 0;border-bottom:1px solid var(--border);align-items:start">
+        <div style="width:28px;height:28px;background:rgba(245,197,24,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--fm);color:var(--gold);font-size:12px;font-weight:700">2</div>
+        <div><strong style="font-family:var(--ff)">Signal → Risk Check (DrawdownGuard + PositionSizer)</strong><br><span style="color:var(--text2);font-size:14px">Signals passing 55/100 confidence gate enter the risk pipeline. Drawdown status checked, lot size calculated, entry price validated against live FIX price (&lt;1% deviation allowed).</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:32px 1fr;gap:16px;padding:20px 0;border-bottom:1px solid var(--border);align-items:start">
+        <div style="width:28px;height:28px;background:rgba(245,197,24,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--fm);color:var(--gold);font-size:12px;font-weight:700">3</div>
+        <div><strong style="font-family:var(--ff)">Risk Check → Execution (MCP / FIX / Paper)</strong><br><span style="color:var(--text2);font-size:14px">Approved orders routed to configured execution method. FIX orders submitted as 35=D (Market) with SL/TP set via 35=AM (ModifyPosition) post-fill. Numeric symbol IDs required for FIX.</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:32px 1fr;gap:16px;padding:20px 0;border-bottom:1px solid var(--border);align-items:start">
+        <div style="width:28px;height:28px;background:rgba(245,197,24,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--fm);color:var(--gold);font-size:12px;font-weight:700">4</div>
+        <div><strong style="font-family:var(--ff)">Execution → Trade Manager (Trailing / Breakeven / Partial TP)</strong><br><span style="color:var(--text2);font-size:14px">Open positions monitored every tick. Breakeven activated at 1:1 R:R, 50% partial close executed, trailing SL follows ATR-based formula until full close.</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:32px 1fr;gap:16px;padding:20px 0;align-items:start">
+        <div style="width:28px;height:28px;background:rgba(245,197,24,.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--fm);color:var(--gold);font-size:12px;font-weight:700">5</div>
+        <div><strong style="font-family:var(--ff)">Events → Telegram Notifier</strong><br><span style="color:var(--text2);font-size:14px">Every lifecycle event (signal, fill, close, drawdown breach, error) triggers a formatted Telegram message to the configured chat ID.</span></div>
+      </div>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Architecture</span></p></footer>
+</div>
+
+<!-- PAGE: API -->
+<div id="page-api" class="page">
+  <div class="section">
+    <div class="section-tag">API REFERENCE</div>
+    <h2>Webhook server API</h2>
+    <p class="section-sub">All endpoints served on port 8080. Webhook POST requires HMAC-SHA256 signature in <code style="color:var(--gold)">X-Webhook-Secret</code> header when enabled.</p>
+
+    <div class="tbl-wrap" style="margin-bottom:48px">
+      <table>
+        <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge badge-post">POST</span></td><td style="font-family:var(--fm);color:var(--gold)">/webhook</td><td>Receive TradingView signals</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td style="font-family:var(--fm);color:var(--gold)">/health</td><td>Health check endpoint</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td style="font-family:var(--fm);color:var(--gold)">/signals</td><td>Recent signal history (paginated)</td></tr>
+          <tr><td><span class="badge badge-get">GET</span></td><td style="font-family:var(--fm);color:var(--gold)">/status</td><td>Server status + runtime stats</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="color:var(--gold);margin-bottom:8px">POST /webhook</h3>
+    <div class="code-hdr"><span>Request Payload</span><span class="badge badge-post">POST</span></div>
+    <div class="code-block"><span class="kw">{</span>
+  <span class="str">"action"</span>: <span class="str">"BUY"</span>,      <span class="cmt">// BUY | SELL | CLOSE (required)</span>
+  <span class="str">"symbol"</span>: <span class="str">"XAUUSD"</span>,   <span class="cmt">// Symbol (required)</span>
+  <span class="str">"volume"</span>: <span class="num">0.01</span>,        <span class="cmt">// Lot size (optional, default 0.01)</span>
+  <span class="str">"sl_pips"</span>: <span class="num">150</span>,        <span class="cmt">// Stop loss in pips (required)</span>
+  <span class="str">"tp_pips"</span>: <span class="num">300</span>,        <span class="cmt">// Take profit in pips (required)</span>
+  <span class="str">"comment"</span>: <span class="str">"PSAR flip"</span>  <span class="cmt">// Optional annotation</span>
+<span class="kw">}</span></div>
+
+    <div class="code-hdr"><span>Response</span><span style="color:var(--green);font-size:12px">200 OK</span></div>
+    <div class="code-block"><span class="kw">{</span>
+  <span class="str">"status"</span>: <span class="str">"accepted"</span>,
+  <span class="str">"signal"</span>: <span class="kw">{</span>
+    <span class="str">"action"</span>: <span class="str">"BUY"</span>,
+    <span class="str">"symbol"</span>: <span class="str">"XAUUSD"</span>,
+    <span class="str">"volume"</span>: <span class="num">0.01</span>,
+    <span class="str">"sl_price"</span>: <span class="num">4510.50</span>,
+    <span class="str">"tp_price"</span>: <span class="num">4545.50</span>,
+    <span class="str">"timestamp"</span>: <span class="str">"2025-05-16T08:30:00Z"</span>
+  <span class="kw">}</span>,
+  <span class="str">"queue_size"</span>: <span class="num">1</span>
+<span class="kw">}</span></div>
+
+    <h3 style="color:var(--gold);margin-bottom:8px;margin-top:40px">GET /health</h3>
+    <div class="code-block"><span class="kw">{</span>
+  <span class="str">"status"</span>: <span class="str">"healthy"</span>,
+  <span class="str">"service"</span>: <span class="str">"chastiefol-webhook"</span>,
+  <span class="str">"timestamp"</span>: <span class="str">"2025-05-16T08:30:00Z"</span>,
+  <span class="str">"uptime"</span>: <span class="kw">true</span>,
+  <span class="str">"queue_size"</span>: <span class="num">0</span>,
+  <span class="str">"signals_received"</span>: <span class="num">142</span>
+<span class="kw">}</span></div>
+
+    <h3 style="color:var(--gold);margin-bottom:8px;margin-top:40px">GET /signals?limit=20</h3>
+    <div class="code-block"><span class="kw">{</span>
+  <span class="str">"signals"</span>: <span class="kw">[{</span>
+    <span class="str">"id"</span>: <span class="str">"sig_abc123"</span>,
+    <span class="str">"action"</span>: <span class="str">"BUY"</span>,
+    <span class="str">"symbol"</span>: <span class="str">"XAUUSD"</span>,
+    <span class="str">"volume"</span>: <span class="num">0.05</span>,
+    <span class="str">"entry_price"</span>: <span class="num">4525.50</span>,
+    <span class="str">"sl_price"</span>: <span class="num">4510.50</span>,
+    <span class="str">"tp_price"</span>: <span class="num">4545.50</span>,
+    <span class="str">"confidence"</span>: <span class="num">78</span>,
+    <span class="str">"timestamp"</span>: <span class="str">"2025-05-16T08:30:00Z"</span>,
+    <span class="str">"status"</span>: <span class="str">"executed"</span>
+  <span class="kw">}]</span>,
+  <span class="str">"total"</span>: <span class="num">142</span>
+<span class="kw">}</span></div>
+
+    <h3 style="color:var(--gold);margin-bottom:8px;margin-top:40px">GET /status</h3>
+    <div class="code-block"><span class="kw">{</span>
+  <span class="str">"running"</span>: <span class="kw">true</span>,
+  <span class="str">"port"</span>: <span class="num">8080</span>,
+  <span class="str">"allowed_symbols"</span>: <span class="kw">[</span><span class="str">"XAUUSD"</span><span class="kw">]</span>,
+  <span class="str">"rate_limit"</span>: <span class="num">10</span>,
+  <span class="str">"hmac_enabled"</span>: <span class="kw">true</span>,
+  <span class="str">"queue_size"</span>: <span class="num">0</span>,
+  <span class="str">"signals_total"</span>: <span class="num">142</span>,
+  <span class="str">"execution_method"</span>: <span class="str">"fix"</span>,
+  <span class="str">"paper_mode"</span>: <span class="kw">false</span>
+<span class="kw">}</span></div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>API Reference</span></p></footer>
+</div>
+
+<!-- PAGE: CONFIG -->
+<div id="page-config" class="page">
+  <div class="section">
+    <div class="section-tag">CONFIGURATION</div>
+    <h2>Environment variables</h2>
+    <p class="section-sub">Full reference for all .env configuration keys. Copy .env.example to .env and fill in your values.</p>
+
+    <div class="env-group">
+      <div class="env-group-hdr">MODE & SYMBOL</div>
+      <div class="env-row"><div><div class="env-key">AGENT_MODE</div><div class="env-desc">Signal input mode</div></div><div><div class="env-val">webhook | autonomous | hybrid</div></div></div>
+      <div class="env-row"><div><div class="env-key">SYMBOL</div><div class="env-desc">Trading instrument</div></div><div><div class="env-val">XAUUSD</div></div></div>
+      <div class="env-row"><div><div class="env-key">PAPER_MODE</div><div class="env-desc">Simulated execution</div></div><div><div class="env-val">false</div></div></div>
+      <div class="env-row"><div><div class="env-key">SCAN_INTERVAL_SEC</div><div class="env-desc">Autonomous scan frequency</div></div><div><div class="env-val">60</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">ACCOUNT & RISK</div>
+      <div class="env-row"><div><div class="env-key">INITIAL_BALANCE</div><div class="env-desc">Starting balance (USD)</div></div><div><div class="env-val">1000</div></div></div>
+      <div class="env-row"><div><div class="env-key">RISK_PCT</div><div class="env-desc">Risk % per trade</div></div><div><div class="env-val">1.0</div></div></div>
+      <div class="env-row"><div><div class="env-key">MAX_RISK_PCT</div><div class="env-desc">Hard cap risk %</div></div><div><div class="env-val">2.0</div></div></div>
+      <div class="env-row"><div><div class="env-key">MIN_CONFIDENCE</div><div class="env-desc">Minimum signal score gate</div></div><div><div class="env-val">0.55</div></div></div>
+      <div class="env-row"><div><div class="env-key">MAX_DAILY_LOSS_PCT</div><div class="env-desc">Daily loss circuit breaker</div></div><div><div class="env-val">3.0</div></div></div>
+      <div class="env-row"><div><div class="env-key">MAX_DRAWDOWN_PCT</div><div class="env-desc">Equity drawdown limit</div></div><div><div class="env-val">10.0</div></div></div>
+      <div class="env-row"><div><div class="env-key">MAX_OPEN_TRADES</div><div class="env-desc">Max concurrent positions</div></div><div><div class="env-val">2</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">EXECUTION METHOD</div>
+      <div class="env-row"><div><div class="env-key">EXECUTION_METHOD</div><div class="env-desc">Broker execution path</div></div><div><div class="env-val">mcp | fix | paper</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">CTRADER MCP (REST/JSON-RPC)</div>
+      <div class="env-row"><div><div class="env-key">CTRADER_MCP_URL</div><div class="env-desc">MCP endpoint URL</div></div><div><div class="env-val">https://mcp.ctrader.com/trading/mcp</div></div></div>
+      <div class="env-row"><div><div class="env-key">CTRADER_ACCESS_TOKEN</div><div class="env-desc">Bearer token (include "Bearer " prefix)</div></div><div><div class="env-val" style="color:var(--text3)">your_token_here</div></div></div>
+      <div class="env-row"><div><div class="env-key">CTRADER_ACCOUNT_ID</div><div class="env-desc">cTrader account number</div></div><div><div class="env-val">5820056</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">CTRADER FIX 4.4 (TCP/SSL)</div>
+      <div class="env-row"><div><div class="env-key">FIX_PRICE_HOST</div><div class="env-desc">FIX price server host</div></div><div><div class="env-val">demo-uk-eqx-01.p.c-trader.com</div></div></div>
+      <div class="env-row"><div><div class="env-key">FIX_PRICE_PORT</div><div class="env-desc">FIX price server port</div></div><div><div class="env-val">5211</div></div></div>
+      <div class="env-row"><div><div class="env-key">FIX_TRADE_HOST</div><div class="env-desc">FIX trade server host</div></div><div><div class="env-val">demo-uk-eqx-01.p.c-trader.com</div></div></div>
+      <div class="env-row"><div><div class="env-key">FIX_TRADE_PORT</div><div class="env-desc">FIX trade server port</div></div><div><div class="env-val">5212</div></div></div>
+      <div class="env-row"><div><div class="env-key">FIX_SENDER_COMP_ID</div><div class="env-desc">FIX sender identifier</div></div><div><div class="env-val">demo.ctrader.5820056</div></div></div>
+      <div class="env-row"><div><div class="env-key">FIX_TARGET_COMP_ID</div><div class="env-desc">FIX target identifier</div></div><div><div class="env-val">cServer</div></div></div>
+      <div class="env-row"><div><div class="env-key">FIX_SYMBOL_MAP</div><div class="env-desc">Numeric symbol mapping (required!)</div></div><div><div class="env-val">{"XAUUSD":"41"}</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">WEBHOOK SERVER</div>
+      <div class="env-row"><div><div class="env-key">WEBHOOK_PORT</div></div><div><div class="env-val">8080</div></div></div>
+      <div class="env-row"><div><div class="env-key">WEBHOOK_SECRET</div><div class="env-desc">HMAC secret key</div></div><div><div class="env-val" style="color:var(--text3)">your_secret_here</div></div></div>
+      <div class="env-row"><div><div class="env-key">WEBHOOK_HMAC_ENABLED</div></div><div><div class="env-val">true</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">DATA FEED PROVIDERS</div>
+      <div class="env-row"><div><div class="env-key">TWELVEDATA_API_KEY</div></div><div><div class="env-val" style="color:var(--text3)">your_key_here</div></div></div>
+      <div class="env-row"><div><div class="env-key">ALPHAVANTAGE_API_KEY</div></div><div><div class="env-val" style="color:var(--text3)">your_key_here</div></div></div>
+      <div class="env-row"><div><div class="env-key">GOLDAPI_API_KEY</div></div><div><div class="env-val" style="color:var(--text3)">your_key_here</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">TELEGRAM NOTIFICATIONS</div>
+      <div class="env-row"><div><div class="env-key">TELEGRAM_BOT_TOKEN</div></div><div><div class="env-val" style="color:var(--text3)">your_bot_token</div></div></div>
+      <div class="env-row"><div><div class="env-key">TELEGRAM_CHAT_ID</div></div><div><div class="env-val">633709469</div></div></div>
+    </div>
+
+    <div class="env-group">
+      <div class="env-group-hdr">LLM AGENT (ReAct)</div>
+      <div class="env-row"><div><div class="env-key">LLM_PROVIDER</div></div><div><div class="env-val">openrouter | groq | openai</div></div></div>
+      <div class="env-row"><div><div class="env-key">LLM_MODEL</div></div><div><div class="env-val">inclusionai/ring-2.6-1t:free</div></div></div>
+      <div class="env-row"><div><div class="env-key">LLM_BASE_URL</div></div><div><div class="env-val">https://openrouter.ai/api/v1</div></div></div>
+      <div class="env-row"><div><div class="env-key">LLM_TEMPERATURE</div></div><div><div class="env-val">0.3</div></div></div>
+      <div class="env-row"><div><div class="env-key">LLM_MAX_TOKENS</div></div><div><div class="env-val">2048</div></div></div>
+      <div class="env-row"><div><div class="env-key">LLM_MAX_REACT_STEPS</div></div><div><div class="env-val">5</div></div></div>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Configuration Reference</span></p></footer>
+</div>
+
+<!-- PAGE: DATA MODELS -->
+<div id="page-models" class="page">
+  <div class="section">
+    <div class="section-tag">DATA MODELS</div>
+    <h2>Python data structures</h2>
+    <p class="section-sub">All core data models used throughout the Chastiefol system.</p>
+
+    <div class="model-grid">
+      <div class="model-card">
+        <div class="model-title">TradeSetup — Analysis Output</div>
+        <div class="model-fields">
+          <div class="model-field"><span class="field-name">signal</span><span class="field-type">str</span><span class="field-desc">BUY | SELL | HOLD</span></div>
+          <div class="model-field"><span class="field-name">entry</span><span class="field-type">float</span><span class="field-desc">Entry price</span></div>
+          <div class="model-field"><span class="field-name">stop_loss</span><span class="field-type">float</span><span class="field-desc">SL price</span></div>
+          <div class="model-field"><span class="field-name">take_profit</span><span class="field-type">float</span><span class="field-desc">TP price</span></div>
+          <div class="model-field"><span class="field-name">rr_ratio</span><span class="field-type">float</span><span class="field-desc">Reward:Risk ratio</span></div>
+          <div class="model-field"><span class="field-name">confidence</span><span class="field-type">float</span><span class="field-desc">0.0 – 1.0</span></div>
+          <div class="model-field"><span class="field-name">confluence</span><span class="field-type">int</span><span class="field-desc">Confirming factors count</span></div>
+          <div class="model-field"><span class="field-name">reasons</span><span class="field-type">list[str]</span><span class="field-desc">Human-readable factors</span></div>
+          <div class="model-field"><span class="field-name">timeframe</span><span class="field-type">str</span><span class="field-desc">e.g. "H1"</span></div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-title">WebhookSignal — Incoming</div>
+        <div class="model-fields">
+          <div class="model-field"><span class="field-name">action</span><span class="field-type">str</span><span class="field-desc">BUY | SELL | CLOSE</span></div>
+          <div class="model-field"><span class="field-name">symbol</span><span class="field-type">str</span><span class="field-desc">"XAUUSD"</span></div>
+          <div class="model-field"><span class="field-name">volume</span><span class="field-type">float</span><span class="field-desc">Lot size</span></div>
+          <div class="model-field"><span class="field-name">sl_pips</span><span class="field-type">int</span><span class="field-desc">Stop loss in pips</span></div>
+          <div class="model-field"><span class="field-name">tp_pips</span><span class="field-type">int</span><span class="field-desc">Take profit in pips</span></div>
+          <div class="model-field"><span class="field-name">comment</span><span class="field-type">str?</span><span class="field-desc">Optional annotation</span></div>
+          <div class="model-field"><span class="field-name">timestamp</span><span class="field-type">str</span><span class="field-desc">ISO 8601</span></div>
+          <div class="model-field"><span class="field-name">raw_payload</span><span class="field-type">dict</span><span class="field-desc">Original webhook body</span></div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-title">TradeLifecycle — Active Trade</div>
+        <div class="model-fields">
+          <div class="model-field"><span class="field-name">entry_price</span><span class="field-type">float</span><span class="field-desc">Fill price</span></div>
+          <div class="model-field"><span class="field-name">stop_loss</span><span class="field-type">float</span><span class="field-desc">Current SL (may trail)</span></div>
+          <div class="model-field"><span class="field-name">take_profit</span><span class="field-type">float</span><span class="field-desc">Target price</span></div>
+          <div class="model-field"><span class="field-name">lot_size</span><span class="field-type">float</span><span class="field-desc">Volume in lots</span></div>
+          <div class="model-field"><span class="field-name">breakeven_moved</span><span class="field-type">bool</span><span class="field-desc">BE activated flag</span></div>
+          <div class="model-field"><span class="field-name">partial_closed</span><span class="field-type">bool</span><span class="field-desc">50% TP taken flag</span></div>
+          <div class="model-field"><span class="field-name">pnl_usd</span><span class="field-type">float</span><span class="field-desc">pips × lot × 100</span></div>
+          <div class="model-field"><span class="field-name">rr_achieved</span><span class="field-type">float</span><span class="field-desc">Current R achieved</span></div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-title">AccountState</div>
+        <div class="model-fields">
+          <div class="model-field"><span class="field-name">balance</span><span class="field-type">float</span><span class="field-desc">Realized balance</span></div>
+          <div class="model-field"><span class="field-name">equity</span><span class="field-type">float</span><span class="field-desc">Balance + floating P&L</span></div>
+          <div class="model-field"><span class="field-name">open_trades</span><span class="field-type">int</span><span class="field-desc">Active position count</span></div>
+          <div class="model-field"><span class="field-name">daily_loss</span><span class="field-type">float</span><span class="field-desc">Loss today USD</span></div>
+          <div class="model-field"><span class="field-name">peak_balance</span><span class="field-type">float</span><span class="field-desc">All-time high balance</span></div>
+          <div class="model-field"><span class="field-name">drawdown_pct</span><span class="field-type">float</span><span class="field-desc">(peak-equity)/peak × 100</span></div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-title">PositionSpec — Risk Calculation</div>
+        <div class="model-fields">
+          <div class="model-field"><span class="field-name">lot_size</span><span class="field-type">float</span><span class="field-desc">Calculated lot size</span></div>
+          <div class="model-field"><span class="field-name">units</span><span class="field-type">float</span><span class="field-desc">lot_size × 100</span></div>
+          <div class="model-field"><span class="field-name">risk_usd</span><span class="field-type">float</span><span class="field-desc">Dollar risk amount</span></div>
+          <div class="model-field"><span class="field-name">risk_pct</span><span class="field-type">float</span><span class="field-desc">% of account risked</span></div>
+          <div class="model-field"><span class="field-name">margin_required</span><span class="field-type">float</span><span class="field-desc">Required margin USD</span></div>
+          <div class="model-field"><span class="field-name">max_lot</span><span class="field-type">float</span><span class="field-desc">Maximum allowed lot</span></div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-title">OrderResult — Execution Response</div>
+        <div class="model-fields">
+          <div class="model-field"><span class="field-name">success</span><span class="field-type">bool</span><span class="field-desc">Execution status</span></div>
+          <div class="model-field"><span class="field-name">order_id</span><span class="field-type">str</span><span class="field-desc">e.g. CHAST_abc123</span></div>
+          <div class="model-field"><span class="field-name">position_id</span><span class="field-type">str</span><span class="field-desc">Broker position ref</span></div>
+          <div class="model-field"><span class="field-name">execution_price</span><span class="field-type">float</span><span class="field-desc">Actual fill price</span></div>
+          <div class="model-field"><span class="field-name">filled_volume</span><span class="field-type">float</span><span class="field-desc">Lots filled</span></div>
+          <div class="model-field"><span class="field-name">error_code</span><span class="field-type">str?</span><span class="field-desc">Null on success</span></div>
+          <div class="model-field"><span class="field-name">error_message</span><span class="field-type">str?</span><span class="field-desc">Human-readable error</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Data Models</span></p></footer>
+</div>
+
+<!-- PAGE: TELEGRAM -->
+<div id="page-telegram" class="page">
+  <div class="section">
+    <div class="section-tag">TELEGRAM NOTIFICATIONS</div>
+    <h2>Message format reference</h2>
+    <p class="section-sub">Every lifecycle event generates a rich formatted Telegram message. Examples below.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:24px">
+      <div>
+        <h3 style="margin-bottom:16px;color:var(--text2)">Signal Alert 🟢</h3>
+        <div class="tg-wrap">
+          <div class="tg-msg">
+            <div class="tg-hdr">🟢 CHASTIEFOL SIGNAL</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line tg-pos">📈 BUY XAUUSD</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line">💰 Entry: $4525.50</div>
+            <div class="tg-line">🛑 Stop Loss: $4510.50</div>
+            <div class="tg-line">🎯 Take Profit: $4545.50</div>
+            <div class="tg-line">⚖️ R:R Ratio: 2.0</div>
+            <div class="tg-line">📊 Confidence: 78%</div>
+            <div class="tg-line">📦 Lot Size: 0.05</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line">🔍 Confluence (5 factors):</div>
+            <div class="tg-line">  ✓ Parabolic SAR flipped bullish</div>
+            <div class="tg-line">  ✓ EMA 20/50/100/200 stack confirmed</div>
+            <div class="tg-line">  ✓ RSI 58.2 in buy zone (40-65)</div>
+            <div class="tg-line">  ✓ MACD histogram bullish and rising</div>
+            <div class="tg-line">  ✓ Active session (London/NY)</div>
+            <div class="tg-sep"></div>
+            <div class="tg-muted">🕐 2025-05-16 08:30 UTC</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 style="margin-bottom:16px;color:var(--text2)">Order Executed ✅</h3>
+        <div class="tg-wrap">
+          <div class="tg-msg" style="border-left-color:var(--green)">
+            <div class="tg-hdr" style="color:var(--green)">✅ ORDER EXECUTED</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line">Action: <span class="tg-pos">BUY</span></div>
+            <div class="tg-line">Symbol: XAUUSD</div>
+            <div class="tg-line">Volume: 0.05 lots</div>
+            <div class="tg-line">Price: $4525.50</div>
+            <div class="tg-line">SL: $4510.50</div>
+            <div class="tg-line">TP: $4545.50</div>
+            <div class="tg-line">Order ID: CHAST_1747382400000</div>
+            <div class="tg-sep"></div>
+            <div class="tg-muted">🕐 08:30:15 UTC</div>
+          </div>
+        </div>
+        <h3 style="margin-bottom:16px;margin-top:24px;color:var(--text2)">Trade Closed WIN 💚</h3>
+        <div class="tg-wrap">
+          <div class="tg-msg" style="border-left-color:var(--green)">
+            <div class="tg-hdr" style="color:var(--green)">💚 TRADE CLOSED — WIN</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line">Direction: <span class="tg-pos">BUY</span></div>
+            <div class="tg-line">Entry: $4525.50 → Exit: $4545.50</div>
+            <div class="tg-line tg-pos">P&L: +$100.00</div>
+            <div class="tg-muted" style="margin-top:8px">🕐 09:45:22 UTC</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 style="margin-bottom:16px;color:var(--text2)">Risk Alert 🛡️</h3>
+        <div class="tg-wrap">
+          <div class="tg-msg" style="border-left-color:var(--gold)">
+            <div class="tg-hdr" style="color:var(--gold)">🛡️ RISK ALERT</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line">Type: Max Drawdown Breached</div>
+            <div class="tg-line">Action: Trading halted</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line">Current: 7.50%</div>
+            <div class="tg-line">Threshold: 10.00%</div>
+            <div class="tg-muted" style="margin-top:8px">🕐 2025-05-16 14:00 UTC</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 style="margin-bottom:16px;color:var(--text2)">Error 🚨</h3>
+        <div class="tg-wrap">
+          <div class="tg-msg" style="border-left-color:var(--red)">
+            <div class="tg-hdr" style="color:var(--red)">🚨 ERROR</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line tg-neg">Order rejected — price mismatch!</div>
+            <div class="tg-sep"></div>
+            <div class="tg-line">Signal entry: $4525.50</div>
+            <div class="tg-line">Live FIX price: $4545.00</div>
+            <div class="tg-line">Deviation: 0.8% (limit 1%)</div>
+            <div class="tg-line">Context: BUY 0.05 lots</div>
+            <div class="tg-muted" style="margin-top:8px">🕐 2025-05-16 08:30 UTC</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Telegram Notifications</span></p></footer>
+</div>
+
+<!-- PAGE: DASHBOARD -->
+<div id="page-dashboard" class="page">
+  <div style="max-width:1280px;margin:0 auto;padding:32px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px">
+      <div><div class="section-tag">LIVE MONITORING</div><h2 style="margin-bottom:0">Dashboard</h2></div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <div class="status-badge"><div class="dot"></div>TRADING ALLOWED</div>
+        <div style="font-family:var(--fm);font-size:13px;color:var(--text3)" id="dash-time">05/16/2025 08:30 UTC</div>
+      </div>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metric-card"><div class="metric-lbl">BALANCE</div><div class="metric-val gold">$1,072.50</div><div class="metric-sub">+$72.50 all-time</div></div>
+      <div class="metric-card"><div class="metric-lbl">EQUITY</div><div class="metric-val gold">$1,094.50</div><div class="metric-sub">Float: +$22.00</div></div>
+      <div class="metric-card"><div class="metric-lbl">OPEN POSITIONS</div><div class="metric-val">1</div><div class="metric-sub">Max: 2</div></div>
+      <div class="metric-card"><div class="metric-lbl">WIN RATE</div><div class="metric-val green">68.4%</div><div class="metric-sub">Today: 3/4</div></div>
+      <div class="metric-card"><div class="metric-lbl">DRAWDOWN</div><div class="metric-val" style="color:var(--gold)">2.5%</div><div class="metric-sub">Limit: 10%</div></div>
+    </div>
+
+    <div class="chart-wrap">
+      <div class="chart-hdr">
+        <span class="chart-title">Equity Curve</span>
+        <div class="chart-legend">
+          <span><span class="legend-dot" style="background:var(--gold)"></span>Equity</span>
+          <span><span class="legend-dot" style="background:var(--green)"></span>Balance</span>
+          <span><span class="legend-dot" style="background:rgba(255,71,87,.6)"></span>Drawdown</span>
+        </div>
+      </div>
+      <canvas id="equityChart" height="200"></canvas>
+    </div>
+
+    <div class="trades-hdr">Open Positions</div>
+    <div class="tbl-wrap" style="margin-bottom:28px">
+      <table>
+        <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>Lot</th><th>P&L</th><th>Duration</th></tr></thead>
+        <tbody>
+          <tr><td style="color:var(--text);font-family:var(--fm)">XAUUSD</td><td><span class="side-buy">BUY</span></td><td style="font-family:var(--fm)">4525.50</td><td style="font-family:var(--fm);color:var(--red)">4510.50</td><td style="font-family:var(--fm);color:var(--green)">4545.50</td><td style="font-family:var(--fm)">0.05</td><td class="pnl-pos">+$22.00</td><td>45m</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="trades-hdr">Signal History</div>
+    <div class="tbl-wrap" style="margin-bottom:28px">
+      <table>
+        <thead><tr><th>Time</th><th>Action</th><th>Symbol</th><th>Entry</th><th>Confidence</th><th>R:R</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td style="font-family:var(--fm)">08:30</td><td><span class="side-buy">BUY</span></td><td style="font-family:var(--fm)">XAUUSD</td><td style="font-family:var(--fm)">4525.50</td><td><div class="signal-conf">78%<div class="conf-bar"><div class="conf-fill" style="width:78%"></div></div></div></td><td style="font-family:var(--fm)">2.0</td><td><span class="status-pill status-filled">Filled</span></td></tr>
+          <tr><td style="font-family:var(--fm)">07:15</td><td><span class="side-sell">SELL</span></td><td style="font-family:var(--fm)">XAUUSD</td><td style="font-family:var(--fm)">4532.00</td><td><div class="signal-conf">65%<div class="conf-bar"><div class="conf-fill" style="width:65%"></div></div></div></td><td style="font-family:var(--fm)">1.8</td><td><span class="status-pill status-rejected">Rejected</span></td></tr>
+          <tr><td style="font-family:var(--fm)">06:00</td><td><span class="side-buy">BUY</span></td><td style="font-family:var(--fm)">XAUUSD</td><td style="font-family:var(--fm)">4518.00</td><td><div class="signal-conf">82%<div class="conf-bar"><div class="conf-fill" style="width:82%"></div></div></div></td><td style="font-family:var(--fm)">2.4</td><td><span class="status-pill status-filled">Filled</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="component-status">
+      <div class="trades-hdr" style="margin-bottom:16px">Component Status</div>
+      <div class="tbl-wrap" style="margin:0">
+        <table>
+          <thead><tr><th>Component</th><th>Status</th><th>Details</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--text)">FIX Connection</td><td><span style="color:var(--green)">● Online</span></td><td>Price + Trade connected</td></tr>
+            <tr><td style="color:var(--text)">Data Feed</td><td><span style="color:#FFBE00">● Degraded</span></td><td>TwelveData rate limited — AlphaVantage fallback active</td></tr>
+            <tr><td style="color:var(--text)">Telegram Bot</td><td><span style="color:var(--green)">● Connected</span></td><td>Bot active, chat ID confirmed</td></tr>
+            <tr><td style="color:var(--text)">Webhook Server</td><td><span style="color:var(--green)">● Listening</span></td><td>Port 8080 · 142 signals received</td></tr>
+            <tr><td style="color:var(--text)">LLM Agent</td><td><span style="color:var(--green)">● Ready</span></td><td>OpenRouter · ring-2.6-1t:free</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE: SESSIONS -->
+<div id="page-sessions" class="page">
+  <div class="section">
+    <div class="section-tag">TRADING SESSIONS</div>
+    <h2>Session schedule (UTC)</h2>
+    <p class="section-sub">Session filter boosts confluence scoring multipliers during high-probability killzone windows.</p>
+
+    <div class="session-grid">
+      <div class="session-card active-sess">
+        <div class="session-time">07:00 – 09:00 UTC</div>
+        <div class="session-name">London Open Killzone</div>
+        <p style="color:var(--text2);font-size:14px">Highest volatility window of the European session. Most institutional order flow concentrates here. Primary trading window for Chastiefol.</p>
+        <div style="display:flex;justify-content:space-between;margin-top:16px;font-size:13px">
+          <span style="color:var(--text3)">Probability Boost</span>
+          <span style="color:var(--gold);font-family:var(--fm)">HIGH</span>
+        </div>
+        <div class="prob-bar"><div class="prob-fill" style="width:90%"></div></div>
+        <div style="margin-top:10px;font-size:12px;color:var(--green);font-family:var(--fm)">● CURRENTLY ACTIVE · 01:23 remaining</div>
+      </div>
+
+      <div class="session-card">
+        <div class="session-time">12:00 – 14:00 UTC</div>
+        <div class="session-name">New York Open Killzone</div>
+        <p style="color:var(--text2);font-size:14px">Overlap between London afternoon and New York morning creates the highest volume period of the trading day. Strong trend continuation setups.</p>
+        <div style="display:flex;justify-content:space-between;margin-top:16px;font-size:13px">
+          <span style="color:var(--text3)">Probability Boost</span>
+          <span style="color:var(--gold);font-family:var(--fm)">HIGH</span>
+        </div>
+        <div class="prob-bar"><div class="prob-fill" style="width:85%"></div></div>
+      </div>
+
+      <div class="session-card">
+        <div class="session-time">15:00 – 17:00 UTC</div>
+        <div class="session-name">London Close</div>
+        <p style="color:var(--text2);font-size:14px">European traders closing positions. Can produce reversals or trend exhaustion. Medium-probability window — requires higher confluence score.</p>
+        <div style="display:flex;justify-content:space-between;margin-top:16px;font-size:13px">
+          <span style="color:var(--text3)">Probability Boost</span>
+          <span style="color:var(--gold);font-family:var(--fm)">MEDIUM</span>
+        </div>
+        <div class="prob-bar"><div class="prob-fill" style="width:55%"></div></div>
+      </div>
+
+      <div class="session-card">
+        <div class="session-time">00:00 – 05:00 UTC</div>
+        <div class="session-name">Asian Range</div>
+        <p style="color:var(--text2);font-size:14px">Low liquidity period for gold. Primarily used to define the Asian range high/low for London breakout setups. Autonomous scanner active but signals require higher confidence.</p>
+        <div style="display:flex;justify-content:space-between;margin-top:16px;font-size:13px">
+          <span style="color:var(--text3)">Probability Boost</span>
+          <span style="color:var(--gold);font-family:var(--fm)">LOW</span>
+        </div>
+        <div class="prob-bar"><div class="prob-fill" style="width:25%"></div></div>
+      </div>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Session Schedule</span></p></footer>
+</div>
+
+<!-- PAGE: SETUP -->
+<div id="page-setup" class="page">
+  <div class="section">
+    <div class="section-tag">SETUP GUIDE</div>
+    <h2>Getting started</h2>
+    <p class="section-sub">From zero to a live autonomous gold trading agent in 5 steps.</p>
+
+    <h3 style="color:var(--text2);margin-bottom:20px">Prerequisites</h3>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:48px">
+      <div class="card" style="flex:1;min-width:200px"><div class="card-icon">🐍</div><h3>Python 3.10+</h3><p style="color:var(--text2);font-size:14px">Required for asyncio features</p></div>
+      <div class="card" style="flex:1;min-width:200px"><div class="card-icon">📈</div><h3>cTrader Account</h3><p style="color:var(--text2);font-size:14px">Demo or live account</p></div>
+      <div class="card" style="flex:1;min-width:200px"><div class="card-icon">🔑</div><h3>API Keys</h3><p style="color:var(--text2);font-size:14px">TwelveData / AlphaVantage / GoldAPI (optional)</p></div>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h3>Clone the repository</h3>
+          <p>Get the source code from GitHub.</p>
+          <div class="code-block">git clone https://github.com/fataakromulmuttaqin/Chastiefol
+cd Chastiefol</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h3>Install dependencies</h3>
+          <p>Install all required Python packages.</p>
+          <div class="code-block">pip install -r requirements.txt</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h3>Configure environment</h3>
+          <p>Copy the example config and fill in your credentials. At minimum, configure your execution method and broker credentials.</p>
+          <div class="code-block">cp .env.example .env
+nano .env   <span class="cmt"># or vim, or your preferred editor</span></div>
+          <p style="margin-top:12px;font-size:14px;color:var(--text2)">Key settings to configure: <span class="inline-code">EXECUTION_METHOD</span>, <span class="inline-code">FIX_SENDER_COMP_ID</span>, <span class="inline-code">FIX_PASSWORD</span>, <span class="inline-code">TELEGRAM_BOT_TOKEN</span></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <h3>cTrader setup</h3>
+          <p><strong>For MCP:</strong> Obtain your Bearer access token from the cTrader dashboard. Set <span class="inline-code">CTRADER_ACCESS_TOKEN</span> — the value must include the "Bearer " prefix.</p>
+          <p style="margin-top:8px"><strong>For FIX:</strong> Use your demo credentials in format <span class="inline-code">demo.ctrader.XXXXXX</span> and your FIX password. Set <span class="inline-code">FIX_SYMBOL_MAP={"XAUUSD":"41"}</span> — numeric IDs are required for FIX.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-content">
+          <h3>Launch the agent</h3>
+          <p>Start Chastiefol. It will connect to broker, initialize data feeds, and begin scanning.</p>
+          <div class="code-block">python chastiefol_main.py</div>
+          <p style="margin-top:12px;font-size:14px;color:var(--green)">✓ You should receive a 🟢 CHASTIEFOL ONLINE Telegram message on successful startup.</p>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="color:var(--gold);margin-top:56px;margin-bottom:20px">TradingView Webhook Integration</h3>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content"><h3>Create a TradingView alert</h3><p>On any chart or strategy, create a new alert with "Webhook URL" as the notification method.</p></div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h3>Set the webhook URL</h3>
+          <div class="code-block">https://your-domain.com/webhook</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content"><h3>Add HMAC secret</h3><p>Add header <span class="inline-code">X-Webhook-Secret</span> matching your <span class="inline-code">WEBHOOK_SECRET</span> env variable.</p></div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <h3>Configure payload</h3>
+          <p>Use JSON format matching the API reference.</p>
+          <div class="code-block">{"action":"{{strategy.order.action}}","symbol":"XAUUSD","sl_pips":150,"tp_pips":300}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Setup Guide</span></p></footer>
+</div>
+
+<!-- PAGE: TROUBLESHOOT -->
+<div id="page-troubleshoot" class="page">
+  <div class="section">
+    <div class="section-tag">TROUBLESHOOTING</div>
+    <h2>Common issues</h2>
+    <p class="section-sub">Solutions for the most frequently encountered issues.</p>
+
+    <div class="trouble-item">
+      <div><div class="trouble-issue">Order rejected: "Symbol must be numeric"</div><div class="trouble-cause">Using string symbol name instead of numeric ID in FIX</div><div class="trouble-fix">→ Set <code>FIX_SYMBOL_MAP={"XAUUSD":"41"}</code> in .env · cTrader FIX requires numeric IDs</div></div>
+      <div class="trouble-badge">FIX</div>
+    </div>
+    <div class="trouble-item">
+      <div><div class="trouble-issue">Order rejected: "Invalid MsgType"</div><div class="trouble-cause">Attempting to include SL/TP in the initial 35=D order message</div><div class="trouble-fix">→ Use <code>modify_position()</code> (35=AM) to set SL/TP after order fill, not in the initial order</div></div>
+      <div class="trouble-badge">FIX</div>
+    </div>
+    <div class="trouble-item">
+      <div><div class="trouble-issue">MARKET_CLOSED error</div><div class="trouble-cause">Attempting to trade during weekend or holiday hours</div><div class="trouble-fix">→ Wait for market open (Sunday 22:00 UTC for gold markets)</div></div>
+      <div class="trouble-badge">BROKER</div>
+    </div>
+    <div class="trouble-item">
+      <div><div class="trouble-issue">Price validation failed</div><div class="trouble-cause">Stale data feed prices causing &gt;1% deviation from live FIX price</div><div class="trouble-fix">→ FIX price is now primary fallback for validation · Check data feed connectivity</div></div>
+      <div class="trouble-badge">DATA</div>
+    </div>
+    <div class="trouble-item">
+      <div><div class="trouble-issue">TwelveData rate limited</div><div class="trouble-cause">Daily 800 credit limit reached on free plan</div><div class="trouble-fix">→ Wait for 00:00 UTC reset · AlphaVantage fallback should activate automatically · Consider upgrading</div></div>
+      <div class="trouble-badge">DATA</div>
+    </div>
+    <div class="trouble-item">
+      <div><div class="trouble-issue">MCP 401 Unauthorized</div><div class="trouble-cause">Missing "Bearer " prefix in access token configuration</div><div class="trouble-fix">→ Token must be formatted as <code>f"Bearer {your_token}"</code> — ensure the "Bearer " prefix is included</div></div>
+      <div class="trouble-badge">MCP</div>
+    </div>
+    <div class="trouble-item">
+      <div><div class="trouble-issue">Telegram messages not received</div><div class="trouble-cause">Incorrect bot token or chat ID</div><div class="trouble-fix">→ Verify TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID · Ensure you have started a conversation with the bot</div></div>
+      <div class="trouble-badge">TELEGRAM</div>
+    </div>
+    <div class="trouble-item">
+      <div><div class="trouble-issue">Confidence score always below threshold</div><div class="trouble-cause">Insufficient confluence factors or wrong timeframe</div><div class="trouble-fix">→ Ensure data feed is returning full OHLCV history · Verify timeframe setting · Lower MIN_CONFIDENCE temporarily to debug</div></div>
+      <div class="trouble-badge">ANALYSIS</div>
+    </div>
+  </div>
+  <footer><p>CHASTIEFOL · <span>Troubleshooting</span></p></footer>
+</div>
+
+<script>
+function showPage(id){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l=>l.classList.remove('active'));
+  document.getElementById('page-'+id).classList.add('active');
+  const idx={'home':0,'features':1,'architecture':2,'api':3,'config':4,'models':5,'telegram':6,'dashboard':7,'sessions':8,'setup':9,'troubleshoot':10};
+  const links=document.querySelectorAll('.nav-link');
+  if(links[idx[id]])links[idx[id]].classList.add('active');
+  window.scrollTo(0,0);
+  if(id==='dashboard')initChart();
+}
+
+// Live price sim
+let basePrice=4540.00;
+function tickPrice(){
+  const delta=(Math.random()-.48)*1.2;
+  basePrice=Math.max(4400,Math.min(4700,basePrice+delta));
+  const change=((basePrice-4540.00)/4540.00*100).toFixed(2);
+  const el=document.getElementById('live-price');
+  const cel=document.getElementById('live-change');
+  if(el)el.textContent=basePrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if(cel){
+    const isPos=change>=0;
+    cel.textContent=(isPos?'▲ +':'▼ ')+change+'%';
+    cel.style.color=isPos?'var(--green)':'var(--red)';
+  }
+}
+setInterval(tickPrice,2000);
+
+// Update time
+function updateTime(){
+  const el=document.getElementById('dash-time');
+  if(el){const d=new Date();el.textContent=d.toISOString().replace('T',' ').slice(0,19)+' UTC';}
+}
+setInterval(updateTime,1000);updateTime();
+
+// Equity chart
+let chartInited=false;
+function initChart(){
+  if(chartInited)return;chartInited=true;
+  const canvas=document.getElementById('equityChart');
+  if(!canvas)return;
+  const ctx=canvas.getContext('2d');
+  const W=canvas.offsetWidth||900;canvas.width=W;canvas.height=200;
+
+  const pts=30;
+  const eq=[],bal=[];
+  let b=1000,e=1000;
+  for(let i=0;i<pts;i++){
+    const d=(Math.random()-.42)*8;
+    b+=d>0?d*0.6:d;
+    e=b+(Math.random()-.4)*15;
+    bal.push(b);eq.push(e);
+  }
+  const maxV=Math.max(...eq,...bal)+10;
+  const minV=Math.min(...eq,...bal)-10;
+  const rng=maxV-minV;
+  const toY=v=>180-(((v-minV)/rng)*160);
+  const toX=i=>(i/(pts-1))*(W-60)+30;
+
+  // DD fill
+  ctx.beginPath();ctx.moveTo(toX(0),toY(bal[0]));
+  for(let i=1;i<pts;i++)ctx.lineTo(toX(i),toY(bal[i]));
+  for(let i=pts-1;i>=0;i--)ctx.lineTo(toX(i),toY(Math.min(eq[i],bal[i])));
+  ctx.closePath();ctx.fillStyle='rgba(255,71,87,.1)';ctx.fill();
+
+  // Balance line
+  ctx.beginPath();ctx.moveTo(toX(0),toY(bal[0]));
+  for(let i=1;i<pts;i++)ctx.lineTo(toX(i),toY(bal[i]));
+  ctx.strokeStyle='#00D084';ctx.lineWidth=1.5;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);
+
+  // Equity line
+  ctx.beginPath();ctx.moveTo(toX(0),toY(eq[0]));
+  for(let i=1;i<pts;i++)ctx.lineTo(toX(i),toY(eq[i]));
+  const grad=ctx.createLinearGradient(0,0,W,0);
+  grad.addColorStop(0,'#B8921A');grad.addColorStop(1,'#F5C518');
+  ctx.strokeStyle=grad;ctx.lineWidth=2;ctx.stroke();
+
+  // Win/loss dots
+  for(let i=1;i<pts;i++){
+    if(Math.random()>.7){
+      const win=eq[i]>eq[i-1];
+      ctx.beginPath();ctx.arc(toX(i),toY(eq[i]),4,0,Math.PI*2);
+      ctx.fillStyle=win?'var(--green)':'var(--red)';ctx.fill();
+    }
+  }
+}
+
+// Session active
+const now=new Date();
+const h=now.getUTCHours();
+let sess='Off-Hours';
+if(h>=7&&h<9)sess='London Open Killzone';
+else if(h>=12&&h<14)sess='New York Open Killzone';
+else if(h>=15&&h<17)sess='London Close';
+else if(h<5)sess='Asian Range';
+const sEl=document.getElementById('session-name');
+if(sEl)sEl.textContent=sess;
+</script>
+</body>
+</html>
