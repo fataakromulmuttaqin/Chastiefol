@@ -21,7 +21,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from enum import Enum
 from pathlib import Path
 
@@ -223,6 +223,7 @@ class ChastiefollIntegrated:
 
         # ── State ──
         self.open_trades: List[TradeLifecycle] = []
+        self.trade_position_ids: Dict[int, str] = {}  # trade id(obj) → broker position_id
         self.trade_log: List[dict] = []
         self.signal_count: int = 0
         self._scan_task: Optional[asyncio.Task] = None
@@ -619,36 +620,61 @@ class ChastiefollIntegrated:
             await self._notify_error("No execution method configured")
             return
 
-        # Handle result
-        if order_result and order_result.get("success"):
+        # Handle result — normalize to common interface
+        # OrderResult (dataclass from MCP/Paper) uses attribute access
+        # FIX returns a plain dict — normalize both to attribute-style access
+        if order_result is None:
+            return
+
+        # Normalize FIX dict result to OrderResult dataclass
+        if isinstance(order_result, dict):
+            order_result = OrderResult(
+                success=order_result.get("success", False),
+                order_id=str(order_result.get("order_id", "")),
+                position_id=str(order_result.get("position_id", "")),
+                execution_price=float(order_result.get("execution_price", 0)),
+                filled_volume=float(order_result.get("filled_volume", 0)),
+                error_code="",
+                error_message=order_result.get("text", ""),
+            )
+
+        if order_result.success:
             # Track trade locally
+            exec_price = order_result.execution_price or entry
+            filled_vol = order_result.filled_volume or volume
+
             trade = TradeLifecycle(
-                entry_price=order_result.get("execution_price") or entry,
+                entry_price=exec_price,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                lot_size=order_result.get("filled_volume") or volume,
+                lot_size=filled_vol,
                 direction=side.value,
-                current_price=order_result.get("execution_price") or entry,
+                current_price=exec_price,
             )
             self.open_trades.append(trade)
             self.account.open_trades = len(self.open_trades)
 
-            log.info(f"✓ Order filled: {side.value} {order_result.get('filled_volume') or volume} lots @ "
-                     f"{order_result.get('execution_price') or entry:.2f} "
-                     f"(ID: {order_result.get('order_id')})")
+            # Map trade object → broker position ID for close operations
+            broker_pos_id = order_result.position_id or order_result.order_id
+            if broker_pos_id:
+                self.trade_position_ids[id(trade)] = broker_pos_id
+
+            log.info(f"✓ Order filled: {side.value} {filled_vol} lots @ "
+                     f"{exec_price:.2f} "
+                     f"(ID: {order_result.order_id})")
 
             # Notify
             if self.telegram:
                 await self.telegram.send_order_executed(
                     action=side.value,
                     symbol=self.config.symbol,
-                    volume=volume,
-                    price=order_result.execution_price or entry,
+                    volume=filled_vol,
+                    price=exec_price,
                     order_id=order_result.order_id,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
                 )
-        elif order_result:
+        else:
             log.error(f"Order failed: {order_result.error_message}")
             await self._notify_error(
                 f"Order rejected: {order_result.error_message}",
@@ -768,14 +794,19 @@ class ChastiefollIntegrated:
                         pnl=pnl,
                     )
 
-                # Modify on broker side
+                # Close on broker side
                 if self.ctrader_mcp and not self.config.paper_mode:
-                    await self.ctrader_mcp.close_position(trade.direction)
+                    broker_pos_id = self.trade_position_ids.get(id(trade))
+                    if broker_pos_id:
+                        await self.ctrader_mcp.close_position(broker_pos_id)
+                    else:
+                        log.warning(f"  No broker position ID for trade — cannot close on broker")
 
                 closed.append(trade)
 
         for t in closed:
             self.open_trades.remove(t)
+            self.trade_position_ids.pop(id(t), None)
 
     # ──────────────────────────────────────────
     # Data Retrieval
