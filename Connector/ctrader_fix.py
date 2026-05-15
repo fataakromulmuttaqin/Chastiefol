@@ -283,7 +283,10 @@ class FIXConnection:
         msg.set(98, 0)   # EncryptMethod: None
         msg.set(108, self.config.heartbeat_interval)  # HeartBtInt
         msg.set(141, "Y")  # ResetSeqNumFlag
-        msg.set(553, self.config.sender_comp_id)  # Username = SenderCompID
+        # Username (tag 553) = numeric account ID only (e.g. "5820056")
+        # Extract numeric part from sender_comp_id like "demo.ctrader.5820056" → "5820056"
+        username = self.config.sender_comp_id.split(".")[-1]
+        msg.set(553, username)
         if self.config.password:
             msg.set(554, self.config.password)  # Password
 
