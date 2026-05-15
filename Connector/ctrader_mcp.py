@@ -135,8 +135,18 @@ class CTraderMCPConnector:
     async def connect(self) -> bool:
         """Establish connection to cTrader MCP server."""
         try:
+            # Ensure token has correct "Bearer " prefix
+            token = self.config.access_token.strip()
+            if not token.lower().startswith("bearer "):
+                token = f"Bearer {token}"
+
+            log.info(f"Connecting to MCP: {self.config.url}")
+            log.info(f"Token length: {len(token)} chars | "
+                     f"Starts with: {token[:15]}... | "
+                     f"Ends with: ...{token[-10:]}")
+
             headers = {
-                "Authorization": self.config.access_token,
+                "Authorization": token,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             }
