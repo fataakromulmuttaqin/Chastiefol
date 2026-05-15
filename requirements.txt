@@ -1,0 +1,50 @@
+# ═══════════════════════════════════════════════════════════════
+# CHASTIEFOL — Python Dependencies
+# Install: pip install -r requirements.txt
+# ═══════════════════════════════════════════════════════════════
+
+# ── Core ──
+numpy>=1.26
+pandas>=2.1
+python-dotenv>=1.0
+
+# ── Web Server (Webhook Listener) ──
+aiohttp>=3.9
+
+# ── HTTP Client (Data Feed, Telegram, cTrader MCP) ──
+aiohttp>=3.9
+
+# ── Data Analysis ──
+scikit-learn>=1.4
+xgboost>=2.0
+
+# ── HTTP Requests (sync fallback) ──
+requests>=2.31
+
+# ── Logging & Utils ──
+colorlog>=6.7
+
+# ══════════════════════════════════════════════
+# OPTIONAL — Install as needed
+# ══════════════════════════════════════════════
+
+# ── Database (trade history persistence) ──
+# aiosqlite>=0.19
+# sqlalchemy>=2.0
+
+# ── LLM / AI Agent (for AI insight generation) ──
+# langchain>=0.1
+# openai>=1.0
+# anthropic>=0.18
+
+# ── Additional Data Sources ──
+# websockets>=12.0          # For WebSocket streaming
+# ccxt>=4.0                 # Multi-exchange connector
+
+# ── Backtesting ──
+# matplotlib>=3.8
+# seaborn>=0.13
+
+# ── Deployment ──
+# gunicorn>=21.0
+# uvloop>=0.19              # Faster asyncio event loop (Linux only)
