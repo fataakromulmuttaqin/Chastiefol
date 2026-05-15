@@ -276,7 +276,7 @@ h1{animation-delay:.2s}
     <span class="price-change" id="live-change">▲ +0.00%</span>
     <span style="color:var(--text3);margin-left:20px">Session:</span>
     <span id="session-name" style="color:var(--gold)">London Open Killzone</span>
-    <span style="color:var(--text3);margin-left:auto">Last signal: — · Demo Mode</span>
+    <span style="color:var(--text3);margin-left:auto">Last signal: — · Demo Mode · FIX Validated</span>
   </div>
   <div class="hero">
     <div class="hero-grid"></div>
@@ -293,10 +293,10 @@ h1{animation-delay:.2s}
   </div>
 
   <div class="stats-bar">
-    <div class="stat-item"><div class="stat-val">1,247</div><div class="stat-lbl">TOTAL TRADES</div></div>
-    <div class="stat-item"><div class="stat-val" style="color:var(--green)">68.4%</div><div class="stat-lbl">WIN RATE</div></div>
-    <div class="stat-item"><div class="stat-val">2.14</div><div class="stat-lbl">AVG R:R RATIO</div></div>
-    <div class="stat-item"><div class="stat-val">99.8%</div><div class="stat-lbl">UPTIME</div></div>
+    <div class="stat-item"><div class="stat-val" style="color:var(--text2)">—</div><div class="stat-lbl">TOTAL TRADES</div></div>
+    <div class="stat-item"><div class="stat-val" style="color:var(--text2)">—</div><div class="stat-lbl">WIN RATE</div></div>
+    <div class="stat-item"><div class="stat-val" style="color:var(--text2)">—</div><div class="stat-lbl">AVG R:R RATIO</div></div>
+    <div class="stat-item"><div class="stat-val" style="color:var(--green)">99.8%</div><div class="stat-lbl">UPTIME</div></div>
   </div>
 
   <div class="section">
@@ -1146,7 +1146,7 @@ function showPage(id){
 
 // Live price sim (demo only — connect to /api/status for real data)
 // TODO: Replace with fetch('/api/status') from dashboard_api.py (port 3001)
-let basePrice=3250.00;
+let basePrice=4541.00;
 function tickPrice(){
   const delta=(Math.random()-.48)*1.2;
   basePrice=Math.max(3100,Math.min(3400,basePrice+delta));
