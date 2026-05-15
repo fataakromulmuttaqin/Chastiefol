@@ -394,11 +394,8 @@ class FIXConnection:
         if fix_ord_type == "3" and price > 0:
             msg.set(99, price)  # StopPx (for Stop)
 
-        # Custom tags for SL/TP (cTrader extension)
-        if stop_loss > 0:
-            msg.set(7539, stop_loss)  # StopLoss (cTrader custom tag)
-        if take_profit > 0:
-            msg.set(7540, take_profit)  # TakeProfit (cTrader custom tag)
+        # Note: SL/TP are set via separate position modify request after fill.
+        # cTrader FIX does not support SL/TP tags in New Order Single (35=D).
 
         raw = msg.build(
             "D", self._next_seq(),
