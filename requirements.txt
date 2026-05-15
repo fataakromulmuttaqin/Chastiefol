@@ -39,7 +39,7 @@ asyncpg>=0.29
 # anthropic>=0.18
 
 # ── Additional Data Sources ──
-# websockets>=12.0          # For WebSocket streaming
+websockets>=12.0            # TradingView WebSocket (fallback data feed)
 # ccxt>=4.0                 # Multi-exchange connector
 
 # ── Backtesting ──
