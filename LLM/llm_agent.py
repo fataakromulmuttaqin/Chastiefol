@@ -1,0 +1,769 @@
+"""
+Chastiefol — LLM Integration (ReAct Agent)
+AI-driven market insight generation for XAUUSD trading decisions.
+
+Framework: ReAct (Reason + Act)
+Cycle: Thought → Action → Observation → Thought → ... → Final Answer
+
+Supported LLM Providers:
+- OpenAI (GPT-4o, GPT-4-turbo)
+- Anthropic (Claude 3.5 Sonnet)
+- Groq (Llama 3, Mixtral)
+- OpenRouter (multi-model gateway)
+- Local (Ollama)
+
+Capabilities:
+- Technical analysis interpretation
+- News sentiment analysis
+- Macro correlation (DXY, Treasury yields)
+- Risk assessment
+- Trade recommendation with probability
+"""
+
+import json
+import logging
+import asyncio
+import os
+import time
+from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from typing import Optional, Dict, List, Any, Callable
+from enum import Enum
+from abc import ABC, abstractmethod
+
+import aiohttp
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("LLM.Agent")
+
+
+# ──────────────────────────────────────────────
+# Configuration & Models
+# ──────────────────────────────────────────────
+
+class LLMProvider(str, Enum):
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GROQ = "groq"
+    OPENROUTER = "openrouter"
+    OLLAMA = "ollama"
+
+
+@dataclass
+class LLMConfig:
+    """LLM provider configuration."""
+    provider: LLMProvider = LLMProvider.OPENAI
+    api_key: str = ""
+    model: str = "gpt-4o"
+    base_url: str = ""
+    temperature: float = 0.3
+    max_tokens: int = 2048
+    timeout: int = 30
+    max_react_steps: int = 5
+
+    # Provider-specific defaults
+    @classmethod
+    def from_env(cls) -> "LLMConfig":
+        provider = LLMProvider(os.getenv("LLM_PROVIDER", "openai"))
+        defaults = {
+            LLMProvider.OPENAI: {
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "api_key_env": "OPENAI_API_KEY",
+            },
+            LLMProvider.ANTHROPIC: {
+                "base_url": "https://api.anthropic.com/v1",
+                "model": "claude-sonnet-4-20250514",
+                "api_key_env": "ANTHROPIC_API_KEY",
+            },
+            LLMProvider.GROQ: {
+                "base_url": "https://api.groq.com/openai/v1",
+                "model": "llama-3.1-70b-versatile",
+                "api_key_env": "GROQ_API_KEY",
+            },
+            LLMProvider.OPENROUTER: {
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "anthropic/claude-sonnet-4-20250514",
+                "api_key_env": "OPENROUTER_API_KEY",
+            },
+            LLMProvider.OLLAMA: {
+                "base_url": "http://localhost:11434/v1",
+                "model": "llama3.1",
+                "api_key_env": "",
+            },
+        }
+        d = defaults[provider]
+        return cls(
+            provider=provider,
+            api_key=os.getenv(d["api_key_env"], os.getenv("LLM_API_KEY", "")),
+            model=os.getenv("LLM_MODEL", d["model"]),
+            base_url=os.getenv("LLM_BASE_URL", d["base_url"]),
+            temperature=float(os.getenv("LLM_TEMPERATURE", "0.3")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2048")),
+        )
+
+
+class InsightType(str, Enum):
+    TECHNICAL = "technical"
+    SENTIMENT = "sentiment"
+    MACRO = "macro"
+    RISK = "risk"
+    FULL = "full"
+
+
+@dataclass
+class MarketInsight:
+    """AI-generated market insight."""
+    summary: str = ""
+    bias: str = "NEUTRAL"  # BULLISH / BEARISH / NEUTRAL
+    confidence: float = 0.5
+    probability_up: float = 0.5
+    probability_down: float = 0.5
+    key_levels: Dict[str, float] = field(default_factory=dict)
+    risk_factors: List[str] = field(default_factory=list)
+    trade_recommendation: str = "HOLD"  # BUY / SELL / HOLD
+    reasoning: List[str] = field(default_factory=list)
+    news_sentiment: str = "neutral"
+    macro_context: str = ""
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    raw_response: str = ""
+
+
+@dataclass
+class ReActStep:
+    """Single step in the ReAct reasoning chain."""
+    step_num: int
+    thought: str = ""
+    action: str = ""
+    action_input: str = ""
+    observation: str = ""
+
+
+# ──────────────────────────────────────────────
+# Tool Definitions (for ReAct Agent)
+# ──────────────────────────────────────────────
+
+class AgentTool(ABC):
+    """Base class for agent tools."""
+    name: str = ""
+    description: str = ""
+
+    @abstractmethod
+    async def execute(self, input_data: str) -> str:
+        pass
+
+
+class GetGoldPriceTool(AgentTool):
+    """Fetch current gold price."""
+    name = "get_gold_price"
+    description = "Fetches the current real-time XAUUSD spot price. No input needed."
+
+    def __init__(self, price_fn: Optional[Callable] = None):
+        self._price_fn = price_fn
+        self._last_price = 0.0
+
+    async def execute(self, input_data: str) -> str:
+        if self._price_fn:
+            price = await self._price_fn()
+            self._last_price = price
+            return f"Current XAUUSD price: ${price:.2f}"
+        return f"Current XAUUSD price: ${self._last_price:.2f} (cached)"
+
+    def update_price(self, price: float):
+        self._last_price = price
+
+
+class CalculateIndicatorsTool(AgentTool):
+    """Calculate technical indicators from market data."""
+    name = "calculate_indicators"
+    description = ("Calculates technical indicators for XAUUSD. "
+                   "Returns RSI, MACD, EMA alignment, Bollinger Band position, ATR.")
+
+    def __init__(self, indicator_fn: Optional[Callable] = None):
+        self._indicator_fn = indicator_fn
+        self._cached_indicators: Dict = {}
+
+    async def execute(self, input_data: str) -> str:
+        if self._indicator_fn:
+            indicators = await self._indicator_fn()
+            self._cached_indicators = indicators
+        if self._cached_indicators:
+            return json.dumps(self._cached_indicators, indent=2)
+        return "No indicator data available."
+
+    def update_indicators(self, indicators: Dict):
+        self._cached_indicators = indicators
+
+
+class SearchNewsTool(AgentTool):
+    """Search for gold-related news headlines."""
+    name = "search_gold_news"
+    description = ("Searches recent financial news related to gold, Fed, inflation, "
+                   "geopolitics. Input: optional search keywords.")
+
+    def __init__(self, news_fn: Optional[Callable] = None):
+        self._news_fn = news_fn
+        self._cached_news: List[str] = []
+
+    async def execute(self, input_data: str) -> str:
+        if self._news_fn:
+            news = await self._news_fn(input_data)
+            self._cached_news = news
+            return "\n".join(f"- {n}" for n in news[:5])
+        if self._cached_news:
+            return "\n".join(f"- {n}" for n in self._cached_news[:5])
+        return "No recent gold news available."
+
+    def update_news(self, headlines: List[str]):
+        self._cached_news = headlines
+
+
+class AnalyzeMacroTool(AgentTool):
+    """Analyze macro correlations (DXY, Treasury yields)."""
+    name = "analyze_macro"
+    description = ("Analyzes macroeconomic factors affecting gold: DXY, "
+                   "US Treasury yields, inflation expectations, Fed rate outlook.")
+
+    def __init__(self, macro_fn: Optional[Callable] = None):
+        self._macro_fn = macro_fn
+        self._cached_macro: Dict = {}
+
+    async def execute(self, input_data: str) -> str:
+        if self._macro_fn:
+            data = await self._macro_fn()
+            self._cached_macro = data
+        if self._cached_macro:
+            return json.dumps(self._cached_macro, indent=2)
+        return ("Macro context: DXY correlation inverse to gold. "
+                "Rising yields typically bearish for gold. "
+                "Geopolitical tension supports gold as safe haven.")
+
+    def update_macro(self, data: Dict):
+        self._cached_macro = data
+
+
+class MarketStructureTool(AgentTool):
+    """Get market structure analysis (SMC)."""
+    name = "get_market_structure"
+    description = ("Returns Smart Money Concepts analysis: market bias, "
+                   "order blocks, FVGs, BOS/CHoCH detection.")
+
+    def __init__(self):
+        self._cached_structure: Dict = {}
+
+    async def execute(self, input_data: str) -> str:
+        if self._cached_structure:
+            return json.dumps(self._cached_structure, indent=2)
+        return "No market structure data available."
+
+    def update_structure(self, structure: Dict):
+        self._cached_structure = structure
+
+
+# ──────────────────────────────────────────────
+# LLM Client (Multi-Provider)
+# ──────────────────────────────────────────────
+
+class LLMClient:
+    """Unified LLM client supporting multiple providers."""
+
+    def __init__(self, config: LLMConfig):
+        self.config = config
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def init(self):
+        self._session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+        )
+
+    async def close(self):
+        if self._session:
+            await self._session.close()
+            self._session = None
+
+    async def chat(self, messages: List[Dict[str, str]]) -> str:
+        """Send chat completion request to the configured LLM provider."""
+        if not self._session:
+            await self.init()
+
+        if self.config.provider == LLMProvider.ANTHROPIC:
+            return await self._anthropic_chat(messages)
+        else:
+            return await self._openai_compatible_chat(messages)
+
+    async def _openai_compatible_chat(self, messages: List[Dict[str, str]]) -> str:
+        """OpenAI-compatible API (works for OpenAI, Groq, OpenRouter, Ollama)."""
+        url = f"{self.config.base_url}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+
+        payload = {
+            "model": self.config.model,
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+        }
+
+        try:
+            async with self._session.post(url, json=payload, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data["choices"][0]["message"]["content"]
+                else:
+                    text = await resp.text()
+                    log.error(f"LLM API error {resp.status}: {text[:200]}")
+                    return ""
+        except Exception as e:
+            log.error(f"LLM request failed: {e}")
+            return ""
+
+    async def _anthropic_chat(self, messages: List[Dict[str, str]]) -> str:
+        """Anthropic Messages API."""
+        url = f"{self.config.base_url}/messages"
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.config.api_key,
+            "anthropic-version": "2023-06-01",
+        }
+
+        # Extract system message
+        system_msg = ""
+        chat_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_msg = msg["content"]
+            else:
+                chat_messages.append(msg)
+
+        payload = {
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "messages": chat_messages,
+        }
+        if system_msg:
+            payload["system"] = system_msg
+
+        try:
+            async with self._session.post(url, json=payload, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data["content"][0]["text"]
+                else:
+                    text = await resp.text()
+                    log.error(f"Anthropic API error {resp.status}: {text[:200]}")
+                    return ""
+        except Exception as e:
+            log.error(f"Anthropic request failed: {e}")
+            return ""
+
+
+
+# ──────────────────────────────────────────────
+# ReAct Agent
+# ──────────────────────────────────────────────
+
+SYSTEM_PROMPT = """You are Chastiefol, a Senior Commodity Strategist AI with 15 years of experience in precious metals trading (XAUUSD). You are conservative, data-driven, and highly analytical.
+
+You analyze gold markets using:
+1. Technical analysis (indicators, price action, Smart Money Concepts)
+2. Macroeconomic factors (Fed policy, DXY, Treasury yields, inflation)
+3. News sentiment (geopolitical tension, economic data releases)
+4. Risk assessment (volatility, correlation shifts)
+
+You follow the ReAct reasoning framework:
+- Thought: Analyze what you know and what you need
+- Action: Use a tool to gather information
+- Observation: Process the tool output
+- Repeat until you have enough information
+- Final Answer: Provide structured market insight
+
+Available tools:
+{tools_description}
+
+IMPORTANT RULES:
+- Never give financial advice. Provide statistical probabilities only.
+- Always cite specific data points for your conclusions.
+- Be conservative — when in doubt, recommend HOLD.
+- Focus on risk management above profit potential.
+
+Respond using this exact format:
+Thought: [your reasoning]
+Action: [tool_name]
+Action Input: [input for the tool]
+
+OR when you have enough information:
+Thought: [final reasoning]
+Final Answer: [your structured response in JSON format]
+
+The Final Answer MUST be valid JSON with these fields:
+{{
+  "summary": "concise market overview",
+  "bias": "BULLISH|BEARISH|NEUTRAL",
+  "confidence": 0.0-1.0,
+  "probability_up": 0.0-1.0,
+  "probability_down": 0.0-1.0,
+  "key_levels": {{"support": price, "resistance": price}},
+  "risk_factors": ["factor1", "factor2"],
+  "trade_recommendation": "BUY|SELL|HOLD",
+  "reasoning": ["reason1", "reason2", "reason3"]
+}}"""
+
+
+class LLMInsightAgent:
+    """
+    ReAct-based LLM agent for generating market insights.
+    
+    Usage:
+        config = LLMConfig.from_env()
+        agent = LLMInsightAgent(config)
+        await agent.initialize()
+        
+        # Update context
+        agent.update_price(2365.50)
+        agent.update_indicators({...})
+        agent.update_news(["Fed holds rates...", ...])
+        
+        # Get insight
+        insight = await agent.analyze()
+        print(insight.summary, insight.bias, insight.trade_recommendation)
+        
+        await agent.shutdown()
+    """
+
+    def __init__(self, config: LLMConfig = None):
+        self.config = config or LLMConfig.from_env()
+        self.client = LLMClient(self.config)
+
+        # Tools
+        self.price_tool = GetGoldPriceTool()
+        self.indicator_tool = CalculateIndicatorsTool()
+        self.news_tool = SearchNewsTool()
+        self.macro_tool = AnalyzeMacroTool()
+        self.structure_tool = MarketStructureTool()
+
+        self.tools: Dict[str, AgentTool] = {
+            self.price_tool.name: self.price_tool,
+            self.indicator_tool.name: self.indicator_tool,
+            self.news_tool.name: self.news_tool,
+            self.macro_tool.name: self.macro_tool,
+            self.structure_tool.name: self.structure_tool,
+        }
+
+        self._react_history: List[ReActStep] = []
+        self._initialized = False
+
+        log.info(f"LLM Agent initialized | Provider: {self.config.provider.value} | "
+                 f"Model: {self.config.model}")
+
+    async def initialize(self):
+        """Initialize the LLM client."""
+        await self.client.init()
+        self._initialized = True
+        log.info("LLM Agent ready.")
+
+    async def shutdown(self):
+        """Cleanup resources."""
+        await self.client.close()
+        self._initialized = False
+
+    # ──────────────────────────────────────────
+    # Context Updates
+    # ──────────────────────────────────────────
+
+    def update_price(self, price: float):
+        """Update current gold price for the agent."""
+        self.price_tool.update_price(price)
+
+    def update_indicators(self, indicators: Dict):
+        """Update technical indicators data."""
+        self.indicator_tool.update_indicators(indicators)
+
+    def update_news(self, headlines: List[str]):
+        """Update news headlines."""
+        self.news_tool.update_news(headlines)
+
+    def update_macro(self, macro_data: Dict):
+        """Update macroeconomic data."""
+        self.macro_tool.update_macro(macro_data)
+
+    def update_market_structure(self, structure: Dict):
+        """Update SMC market structure analysis."""
+        self.structure_tool.update_structure(structure)
+
+    # ──────────────────────────────────────────
+    # Main Analysis
+    # ──────────────────────────────────────────
+
+    async def analyze(self, query: str = None) -> MarketInsight:
+        """
+        Run ReAct reasoning loop to generate market insight.
+        Returns a structured MarketInsight object.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if not query:
+            query = ("Analyze the current XAUUSD market conditions. "
+                     "Provide a comprehensive technical and fundamental overview "
+                     "with a trade recommendation and probability assessment.")
+
+        # Build tools description
+        tools_desc = "\n".join(
+            f"- {name}: {tool.description}" for name, tool in self.tools.items()
+        )
+        system = SYSTEM_PROMPT.format(tools_description=tools_desc)
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": query},
+        ]
+
+        self._react_history = []
+
+        # ReAct Loop
+        for step in range(1, self.config.max_react_steps + 1):
+            response = await self.client.chat(messages)
+            if not response:
+                log.warning(f"Empty LLM response at step {step}")
+                break
+
+            log.debug(f"ReAct step {step}: {response[:100]}...")
+
+            # Check for Final Answer
+            if "Final Answer:" in response:
+                return self._parse_final_answer(response)
+
+            # Parse Action
+            react_step = self._parse_react_step(response, step)
+            self._react_history.append(react_step)
+
+            if react_step.action and react_step.action in self.tools:
+                # Execute tool
+                observation = await self.tools[react_step.action].execute(
+                    react_step.action_input
+                )
+                react_step.observation = observation
+
+                # Add to conversation
+                messages.append({"role": "assistant", "content": response})
+                messages.append({
+                    "role": "user",
+                    "content": f"Observation: {observation}"
+                })
+            else:
+                # No valid action — ask for final answer
+                messages.append({"role": "assistant", "content": response})
+                messages.append({
+                    "role": "user",
+                    "content": ("Based on the information gathered, "
+                                "please provide your Final Answer in JSON format.")
+                })
+
+        # If loop exhausted, try to get final answer
+        messages.append({
+            "role": "user",
+            "content": "Please provide your Final Answer now in JSON format."
+        })
+        response = await self.client.chat(messages)
+        if response:
+            return self._parse_final_answer(response)
+
+        # Fallback
+        return MarketInsight(
+            summary="Unable to generate insight — LLM did not respond.",
+            bias="NEUTRAL",
+            trade_recommendation="HOLD",
+        )
+
+    async def quick_analysis(self, price: float, indicators: Dict) -> MarketInsight:
+        """
+        Quick single-shot analysis without ReAct loop.
+        Faster but less thorough than full analyze().
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        prompt = f"""Analyze XAUUSD with this data:
+
+Current Price: ${price:.2f}
+Indicators: {json.dumps(indicators, indent=2)}
+
+Provide a brief JSON response with:
+- summary (1-2 sentences)
+- bias (BULLISH/BEARISH/NEUTRAL)
+- confidence (0.0-1.0)
+- trade_recommendation (BUY/SELL/HOLD)
+- reasoning (2-3 key reasons)
+
+Respond ONLY with valid JSON."""
+
+        messages = [
+            {"role": "system", "content": "You are a gold market analyst. Be concise and data-driven."},
+            {"role": "user", "content": prompt},
+        ]
+
+        response = await self.client.chat(messages)
+        if response:
+            return self._parse_json_insight(response)
+
+        return MarketInsight(summary="Quick analysis failed.", bias="NEUTRAL")
+
+    # ──────────────────────────────────────────
+    # Parsing Helpers
+    # ──────────────────────────────────────────
+
+    def _parse_react_step(self, response: str, step_num: int) -> ReActStep:
+        """Parse a ReAct response into structured step."""
+        step = ReActStep(step_num=step_num)
+        lines = response.strip().split("\n")
+
+        for line in lines:
+            line_stripped = line.strip()
+            if line_stripped.startswith("Thought:"):
+                step.thought = line_stripped[len("Thought:"):].strip()
+            elif line_stripped.startswith("Action:"):
+                step.action = line_stripped[len("Action:"):].strip()
+            elif line_stripped.startswith("Action Input:"):
+                step.action_input = line_stripped[len("Action Input:"):].strip()
+
+        return step
+
+    def _parse_final_answer(self, response: str) -> MarketInsight:
+        """Parse Final Answer from ReAct response."""
+        # Extract JSON from response
+        json_str = ""
+        if "Final Answer:" in response:
+            json_str = response.split("Final Answer:")[-1].strip()
+        else:
+            json_str = response.strip()
+
+        return self._parse_json_insight(json_str)
+
+    def _parse_json_insight(self, text: str) -> MarketInsight:
+        """Parse JSON string into MarketInsight."""
+        # Try to extract JSON from text
+        json_str = text.strip()
+
+        # Handle markdown code blocks
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[-1].split("```")[0].strip()
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1].split("```")[0].strip()
+
+        # Find JSON object boundaries
+        start = json_str.find("{")
+        end = json_str.rfind("}") + 1
+        if start >= 0 and end > start:
+            json_str = json_str[start:end]
+
+        try:
+            data = json.loads(json_str)
+            return MarketInsight(
+                summary=data.get("summary", ""),
+                bias=data.get("bias", "NEUTRAL").upper(),
+                confidence=float(data.get("confidence", 0.5)),
+                probability_up=float(data.get("probability_up", 0.5)),
+                probability_down=float(data.get("probability_down", 0.5)),
+                key_levels=data.get("key_levels", {}),
+                risk_factors=data.get("risk_factors", []),
+                trade_recommendation=data.get("trade_recommendation", "HOLD").upper(),
+                reasoning=data.get("reasoning", []),
+                news_sentiment=data.get("news_sentiment", "neutral"),
+                macro_context=data.get("macro_context", ""),
+                raw_response=text,
+            )
+        except json.JSONDecodeError as e:
+            log.warning(f"Failed to parse LLM JSON: {e}")
+            # Fallback: extract what we can from raw text
+            return MarketInsight(
+                summary=text[:200] if text else "Parse error",
+                bias="NEUTRAL",
+                trade_recommendation="HOLD",
+                raw_response=text,
+            )
+
+    # ──────────────────────────────────────────
+    # Status
+    # ──────────────────────────────────────────
+
+    @property
+    def react_history(self) -> List[ReActStep]:
+        """Get the reasoning trace from last analysis."""
+        return self._react_history
+
+    def get_status(self) -> Dict:
+        return {
+            "initialized": self._initialized,
+            "provider": self.config.provider.value,
+            "model": self.config.model,
+            "tools": list(self.tools.keys()),
+            "react_steps_last": len(self._react_history),
+        }
+
+
+# ──────────────────────────────────────────────
+# Standalone Test
+# ──────────────────────────────────────────────
+
+async def main():
+    """Test LLM agent standalone."""
+    config = LLMConfig.from_env()
+    agent = LLMInsightAgent(config)
+    await agent.initialize()
+
+    # Mock data
+    agent.update_price(2365.50)
+    agent.update_indicators({
+        "rsi_14": 58.3,
+        "macd_signal": "bullish_cross",
+        "ema_20": 2360.0,
+        "ema_50": 2345.0,
+        "ema_100": 2320.0,
+        "ema_200": 2280.0,
+        "ema_alignment": "bullish",
+        "bollinger_position": "upper_half",
+        "atr_14": 18.5,
+        "psar": "below_price",
+    })
+    agent.update_news([
+        "Fed signals potential rate cut in September",
+        "Gold demand from central banks hits record",
+        "US CPI comes in below expectations",
+        "Geopolitical tensions rise in Middle East",
+    ])
+    agent.update_macro({
+        "dxy": 104.2,
+        "dxy_trend": "weakening",
+        "us_10y_yield": 4.35,
+        "yield_trend": "declining",
+        "fed_outlook": "dovish pivot expected",
+        "inflation": "cooling",
+    })
+
+    # Full analysis
+    insight = await agent.analyze()
+    log.info(f"\n{'='*50}")
+    log.info(f"  AI MARKET INSIGHT")
+    log.info(f"{'='*50}")
+    log.info(f"  Summary: {insight.summary}")
+    log.info(f"  Bias: {insight.bias}")
+    log.info(f"  Confidence: {insight.confidence*100:.0f}%")
+    log.info(f"  Recommendation: {insight.trade_recommendation}")
+    log.info(f"  P(Up): {insight.probability_up*100:.0f}%")
+    log.info(f"  P(Down): {insight.probability_down*100:.0f}%")
+    for r in insight.reasoning:
+        log.info(f"    • {r}")
+    log.info(f"{'='*50}")
+
+    await agent.shutdown()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
