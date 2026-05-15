@@ -567,7 +567,7 @@ class FIXConnection:
 
     def subscribe_market_data(self, symbol: str, req_id: str = "1",
                               symbol_map: Optional["FIXSymbolMap"] = None):
-        """Subscribe to market data (35=V)."""
+        """Subscribe to market data (35=V) with proper repeating group format."""
         # Translate symbol to numeric ID for cTrader FIX
         numeric_symbol = symbol
         if symbol_map:
@@ -578,25 +578,47 @@ class FIXConnection:
                 log.error(f"[PRICE] Symbol mapping failed: {e}")
                 return
 
-        msg = FIXMessage()
-        msg.set(262, req_id)   # MDReqID
-        msg.set(263, 1)        # SubscriptionRequestType: Snapshot + Updates
-        msg.set(264, 1)        # MarketDepth: Top of Book
-        msg.set(265, 1)        # MDUpdateType: Incremental
-        msg.set(267, 2)        # NoMDEntryTypes: 2 (Bid + Ask)
-        msg.set(269, 0)        # MDEntryType: Bid
-        # Second entry type (Ask) — simplified for demo
-        msg.set(146, 1)        # NoRelatedSym
-        msg.set(55, numeric_symbol)  # Symbol (NUMERIC ID)
+        # Build market data request manually because FIX repeating groups
+        # require tag 269 to appear multiple times (Bid=0, Ask=1),
+        # which our simple dict-based FIXMessage builder cannot do.
+        #
+        # Correct FIX format:
+        #   262=reqId | 263=1 | 264=1 | 265=1 | 267=2 | 269=0 | 269=1 | 146=1 | 55=symbol
+        #
+        # Previously we only sent 269=0 (one entry), causing:
+        #   "Incorrect NumInGroup count for repeating group, field=267"
 
-        raw = msg.build(
-            "V", self._next_seq(),
-            self.config.sender_comp_id,
-            self.config.target_comp_id,
-            self.sender_sub_id,
-            self.sender_sub_id,
-        )
-        self._send_raw(raw)
+        SOH = FIXMessage.SOH
+        seq = self._next_seq()
+        ts = FIXMessage._utc_timestamp()
+
+        # Body fields (order matters for repeating groups!)
+        body_parts = [
+            f"35=V",
+            f"49={self.config.sender_comp_id}",
+            f"56={self.config.target_comp_id}",
+            f"50={self.sender_sub_id}",
+            f"57={self.sender_sub_id}",
+            f"34={seq}",
+            f"52={ts}",
+            f"262={req_id}",       # MDReqID
+            f"263=1",              # SubscriptionRequestType: Snapshot + Updates
+            f"264=1",              # MarketDepth: Top of Book
+            f"265=1",              # MDUpdateType: Incremental
+            f"267=2",              # NoMDEntryTypes: 2 entries
+            f"269=0",              # MDEntryType: Bid
+            f"269=1",              # MDEntryType: Ask
+            f"146=1",              # NoRelatedSym: 1 symbol
+            f"55={numeric_symbol}",  # Symbol (NUMERIC ID)
+        ]
+
+        body = SOH.join(body_parts) + SOH
+        header = f"8={FIXMessage.BEGIN_STRING}{SOH}9={len(body)}{SOH}"
+        msg_without_checksum = header + body
+        checksum = sum(ord(c) for c in msg_without_checksum) % 256
+        full_msg = msg_without_checksum + f"10={checksum:03d}{SOH}"
+
+        self._send_raw(full_msg.encode("ascii"))
         log.info(f"[PRICE] Subscribed to market data for {symbol} (ID={numeric_symbol})")
 
     def unsubscribe_market_data(self, symbol: str, req_id: str = "1",
@@ -776,10 +798,13 @@ class FIXConnection:
             self.on_execution(report)
 
     def _handle_market_data(self, msg: FIXMessage):
-        """Handle market data snapshot/refresh."""
+        """Handle market data snapshot/refresh (35=W or 35=X)."""
+        # cTrader sends bid/ask in MDEntryPx (270) with MDEntryType (269)
+        # For snapshot (W): may contain multiple entries
+        # We extract bid (269=0) and ask (269=1) prices
         data = {
             "symbol": msg.get(55),
-            "bid": msg.get(270, ""),  # MDEntryPx (first entry = bid)
+            "bid": msg.get(270, ""),  # MDEntryPx (first entry)
             "ask": "",
             "timestamp": msg.get(52),
         }
