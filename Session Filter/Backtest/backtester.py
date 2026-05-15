@@ -23,9 +23,9 @@ class BacktestConfig:
     spread_pips:         float = 0.30     # typical XAUUSD spread
     commission_per_lot:  float = 3.50     # USD per lot round-trip
     slippage_pips:       float = 0.10
-    atr_sl_mult:         float = 1.5
+    atr_sl_mult:         float = 2.0      # INCREASED from 1.5 — wider stops for gold volatility
     rr_target:           float = 2.0
-    min_confluence:      int   = 55
+    min_confluence:      int   = 50       # LOWERED from 55 — new scoring system is better calibrated
 
 
 @dataclass
@@ -220,21 +220,49 @@ class Backtester:
 
     def _simulate_trade(self, df, start_idx, signal,
                          entry, sl, tp) -> tuple[str, float, int]:
-        """Walk bar-by-bar until SL or TP is hit."""
+        """
+        Walk bar-by-bar until SL or TP is hit.
+        FIX: When both SL and TP could be hit in the same candle,
+        use distance-based probability instead of always assuming SL first.
+        """
         for j in range(start_idx, min(start_idx + 500, len(df))):
             high = df["high"].iloc[j]
             low  = df["low"].iloc[j]
+            open_price = df["open"].iloc[j]
 
             if signal == Signal.BUY:
-                if low <= sl:
-                    return "LOSS", sl, j
-                if high >= tp:
-                    return "WIN", tp, j
+                sl_hit = low <= sl
+                tp_hit = high >= tp
             else:
-                if high >= sl:
+                sl_hit = high >= sl
+                tp_hit = low <= tp
+
+            if sl_hit and tp_hit:
+                # Both levels touched in same candle — use distance from open
+                # to determine which was hit first (more realistic than always SL)
+                if signal == Signal.BUY:
+                    dist_to_sl = abs(open_price - sl)
+                    dist_to_tp = abs(open_price - tp)
+                else:
+                    dist_to_sl = abs(open_price - sl)
+                    dist_to_tp = abs(open_price - tp)
+
+                # Closer level more likely hit first; if equal, use 50/50 random
+                if dist_to_sl < dist_to_tp:
                     return "LOSS", sl, j
-                if low <= tp:
+                elif dist_to_tp < dist_to_sl:
                     return "WIN", tp, j
+                else:
+                    # Equal distance — use pseudo-random based on bar index
+                    if j % 2 == 0:
+                        return "WIN", tp, j
+                    else:
+                        return "LOSS", sl, j
+
+            if sl_hit:
+                return "LOSS", sl, j
+            if tp_hit:
+                return "WIN", tp, j
 
         # Timeout: close at last close price
         last_close = df["close"].iloc[min(start_idx + 499, len(df) - 1)]

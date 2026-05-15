@@ -173,6 +173,35 @@ class TechnicalIndicators:
         return sar
 
     @staticmethod
+    def adx(high: pd.Series, low: pd.Series, close: pd.Series,
+            period: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
+        """
+        Average Directional Index — measures trend strength.
+        Returns (ADX, +DI, -DI).
+        ADX > 25 = trending market, ADX < 20 = ranging/choppy.
+        """
+        plus_dm = high.diff()
+        minus_dm = -low.diff()
+
+        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+
+        tr = pd.concat([
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs()
+        ], axis=1).max(axis=1)
+
+        atr = tr.ewm(span=period, adjust=False).mean()
+        plus_di = 100 * plus_dm.ewm(span=period, adjust=False).mean() / atr.replace(0, np.nan)
+        minus_di = 100 * minus_dm.ewm(span=period, adjust=False).mean() / atr.replace(0, np.nan)
+
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+        adx = dx.ewm(span=period, adjust=False).mean()
+
+        return adx, plus_di, minus_di
+
+    @staticmethod
     def vwap(high: pd.Series, low: pd.Series, close: pd.Series,
              volume: pd.Series) -> pd.Series:
         typical = (high + low + close) / 3
@@ -367,14 +396,15 @@ class ConfluenceScorer:
     """
 
     WEIGHTS = {
-        "psar_aligned":             18,
-        "market_structure_aligned": 17,
-        "ema_stack":                15,
+        "adx_trending":             15,   # NEW: ADX confirms trending market
+        "psar_aligned":             15,
+        "market_structure_aligned": 15,
+        "ema_aligned":              12,   # RELAXED: was "ema_stack" requiring full 4-EMA order
         "rsi_zone":                 10,
         "macd_aligned":             10,
-        "order_block_proximity":    10,
-        "fvg_in_range":              8,
-        "session_active":            7,
+        "order_block_proximity":     8,
+        "fvg_in_range":              5,
+        "session_active":            5,
         "bos_confirmed":             5,
     }
 
@@ -386,6 +416,21 @@ class ConfluenceScorer:
         reasons = []
         close   = df["close"].iloc[-1]
         ti      = TechnicalIndicators()
+
+        # 0. ADX trending filter — confirms market is trending (not ranging)
+        adx_val, plus_di, minus_di = ti.adx(df["high"], df["low"], df["close"])
+        current_adx = adx_val.iloc[-1] if not pd.isna(adx_val.iloc[-1]) else 0
+        if current_adx >= 20:
+            score += self.WEIGHTS["adx_trending"]
+            if current_adx >= 30:
+                reasons.append(f"ADX {current_adx:.1f} — strong trend")
+            else:
+                reasons.append(f"ADX {current_adx:.1f} — trending market")
+            # Bonus: DI alignment with direction
+            if direction == Signal.BUY and plus_di.iloc[-1] > minus_di.iloc[-1]:
+                reasons.append(f"+DI ({plus_di.iloc[-1]:.1f}) > -DI ({minus_di.iloc[-1]:.1f}) confirms bullish")
+            elif direction == Signal.SELL and minus_di.iloc[-1] > plus_di.iloc[-1]:
+                reasons.append(f"-DI ({minus_di.iloc[-1]:.1f}) > +DI ({plus_di.iloc[-1]:.1f}) confirms bearish")
 
         # 1. Market structure alignment
         if (direction == Signal.BUY  and structure.bias == Bias.BULLISH) or \
@@ -411,29 +456,39 @@ class ConfluenceScorer:
             else:
                 reasons.append(f"Parabolic SAR confirms {'bullish' if direction == Signal.BUY else 'bearish'} (SAR: {psar_val:.2f})")
 
-        # 2. EMA Stack (20 > 50 > 100 > 200 for bull, inverse for bear)
+        # 3. EMA Alignment — RELAXED: price > EMA20 & EMA50, or EMA20 > EMA50 (no need full stack)
         ema20  = ti.ema(df["close"], 20).iloc[-1]
         ema50  = ti.ema(df["close"], 50).iloc[-1]
         ema100 = ti.ema(df["close"], 100).iloc[-1]
         ema200 = ti.ema(df["close"], 200).iloc[-1]
-        bull_stack = ema20 > ema50 > ema100 > ema200
-        bear_stack = ema20 < ema50 < ema100 < ema200
 
-        if (direction == Signal.BUY  and bull_stack) or \
-           (direction == Signal.SELL and bear_stack):
-            score += self.WEIGHTS["ema_stack"]
-            reasons.append("EMA 20/50/100/200 stack confirmed")
+        if direction == Signal.BUY:
+            # Bullish: price above EMA20 & EMA50, and EMA20 > EMA50
+            if close > ema20 and close > ema50 and ema20 > ema50:
+                score += self.WEIGHTS["ema_aligned"]
+                if ema50 > ema100 > ema200:
+                    reasons.append("Full EMA stack confirmed (20>50>100>200)")
+                else:
+                    reasons.append(f"EMA 20/50 bullish aligned (price above both)")
+        elif direction == Signal.SELL:
+            # Bearish: price below EMA20 & EMA50, and EMA20 < EMA50
+            if close < ema20 and close < ema50 and ema20 < ema50:
+                score += self.WEIGHTS["ema_aligned"]
+                if ema50 < ema100 < ema200:
+                    reasons.append("Full EMA stack confirmed (20<50<100<200)")
+                else:
+                    reasons.append(f"EMA 20/50 bearish aligned (price below both)")
 
-        # 3. RSI zone (not overbought for buys, not oversold for sells)
+        # 4. RSI zone — WIDENED: allows momentum trades
         rsi = ti.rsi(df["close"]).iloc[-1]
-        if direction == Signal.BUY  and 40 <= rsi <= 65:
+        if direction == Signal.BUY and 35 <= rsi <= 75:
             score += self.WEIGHTS["rsi_zone"]
-            reasons.append(f"RSI {rsi:.1f} in buy zone (40-65)")
-        elif direction == Signal.SELL and 35 <= rsi <= 60:
+            reasons.append(f"RSI {rsi:.1f} in buy zone (35-75)")
+        elif direction == Signal.SELL and 25 <= rsi <= 65:
             score += self.WEIGHTS["rsi_zone"]
-            reasons.append(f"RSI {rsi:.1f} in sell zone (35-60)")
+            reasons.append(f"RSI {rsi:.1f} in sell zone (25-65)")
 
-        # 4. MACD alignment
+        # 5. MACD alignment
         macd_line, sig_line, hist = ti.macd(df["close"])
         if direction == Signal.BUY  and hist.iloc[-1] > 0 and hist.iloc[-1] > hist.iloc[-2]:
             score += self.WEIGHTS["macd_aligned"]
@@ -442,7 +497,7 @@ class ConfluenceScorer:
             score += self.WEIGHTS["macd_aligned"]
             reasons.append("MACD histogram bearish and falling")
 
-        # 5. Order block proximity
+        # 6. Order block proximity
         for ob in structure.order_blocks:
             if direction == Signal.BUY and ob["type"] == "bullish":
                 if ob["bottom"] <= close <= ob["top"] * 1.002:
@@ -455,7 +510,7 @@ class ConfluenceScorer:
                     reasons.append(f"Price at bearish OB ({ob['bottom']:.2f}-{ob['top']:.2f})")
                     break
 
-        # 6. FVG in range
+        # 7. FVG in range
         for fvg in structure.fair_value_gaps:
             if direction == Signal.BUY and fvg["type"] == "bullish":
                 if fvg["bottom"] <= close <= fvg["top"]:
@@ -468,12 +523,12 @@ class ConfluenceScorer:
                     reasons.append(f"Price filling bearish FVG ({fvg['bottom']:.2f}-{fvg['top']:.2f})")
                     break
 
-        # 7. Session filter
+        # 8. Session filter
         if session_active:
             score += self.WEIGHTS["session_active"]
             reasons.append("Active trading session (London/NY)")
 
-        # 8. BOS confirmed
+        # 9. BOS confirmed
         if structure.bos_detected:
             score += self.WEIGHTS["bos_confirmed"]
             reasons.append("Break of Structure confirmed")
@@ -492,8 +547,9 @@ class ChastiefollAgent:
     to produce actionable trade setups for XAUUSD.
     """
 
-    MINIMUM_CONFLUENCE_SCORE = 55   # only take trades ≥ 55/100
+    MINIMUM_CONFLUENCE_SCORE = 50   # lowered: was 55, allows more trades with improved filters
     MINIMUM_RR = 1.5                # minimum reward:risk ratio
+    MINIMUM_ADX = 20                # ADX threshold — only trade in trending markets
 
     def __init__(self):
         self.structure_analyzer = MarketStructureAnalyzer()
@@ -502,7 +558,7 @@ class ChastiefollAgent:
 
     def analyze(self, df: pd.DataFrame,
                 session_active: bool = True,
-                atr_multiplier_sl: float = 1.5,
+                atr_multiplier_sl: float = 2.0,
                 rr_target: float = 2.0) -> Optional[TradeSetup]:
         """
         Full analysis pipeline → TradeSetup or None.
@@ -510,7 +566,7 @@ class ChastiefollAgent:
         df must have columns: open, high, low, close, volume
         Minimum 100 bars recommended.
         
-        Primary signal: PSAR flip + EMA alignment
+        Primary signal: PSAR flip + EMA 20/50 alignment + ADX trending
         Confirmation: Market structure, RSI, MACD, OB, FVG, session
         """
         if len(df) < 50:
@@ -521,45 +577,55 @@ class ChastiefollAgent:
         close     = df["close"].iloc[-1]
         atr_val   = self.ti.atr(df["high"], df["low"], df["close"]).iloc[-1]
 
-        # ── Primary Signal: PSAR + EMA alignment ──
+        # ── ADX Filter: Only trade in trending market ──
+        adx_val, plus_di, minus_di = self.ti.adx(df["high"], df["low"], df["close"])
+        current_adx = adx_val.iloc[-1] if not pd.isna(adx_val.iloc[-1]) else 0
+        if current_adx < self.MINIMUM_ADX:
+            return None  # Market is ranging/choppy — avoid PSAR whipsaws
+
+        # ── Primary Signal: PSAR + EMA alignment (RELAXED) ──
         psar = self.ti.parabolic_sar(df["high"], df["low"])
         psar_val = psar.iloc[-1]
         psar_bull = close > psar_val
         psar_bear = close < psar_val
 
-        # EMA 20/50/100/200
+        # EMA 20/50 (primary) and 100/200 (context)
         ema20  = self.ti.ema(df["close"], 20).iloc[-1]
         ema50  = self.ti.ema(df["close"], 50).iloc[-1]
         ema100 = self.ti.ema(df["close"], 100).iloc[-1]
         ema200 = self.ti.ema(df["close"], 200).iloc[-1]
 
-        ema_bull_align = ema20 > ema50 > ema100 > ema200
-        ema_bear_align = ema20 < ema50 < ema100 < ema200
-        price_above_all = close > ema20 and close > ema50 and close > ema100 and close > ema200
-        price_below_all = close < ema20 and close < ema50 and close < ema100 and close < ema200
+        # RELAXED conditions: EMA20 > EMA50 + price above both (no need full 4-EMA stack)
+        ema_bull_basic = ema20 > ema50 and close > ema20
+        ema_bear_basic = ema20 < ema50 and close < ema20
 
-        # Determine candidate direction from PSAR + EMA (matching Pine Script logic)
-        # Primary: PSAR confirms + full EMA alignment + price above/below all
-        # Alternative: PSAR confirms + price above/below EMA20 & EMA50 (partial)
+        # Full alignment (bonus, not required)
+        ema_bull_full = ema20 > ema50 > ema100 > ema200
+        ema_bear_full = ema20 < ema50 < ema100 < ema200
+
+        # Determine candidate direction
         direction = None
 
-        if psar_bull and ema_bull_align and price_above_all:
+        # Primary: PSAR confirms + basic EMA alignment
+        if psar_bull and ema_bull_basic:
             direction = Signal.BUY
-        elif psar_bear and ema_bear_align and price_below_all:
+        elif psar_bear and ema_bear_basic:
             direction = Signal.SELL
-        elif psar_bull and close > ema20 and close > ema50:
-            # Alternative entry — partial EMA alignment
-            direction = Signal.BUY
-        elif psar_bear and close < ema20 and close < ema50:
-            direction = Signal.SELL
+
+        # Alternative: PSAR confirms + price above/below EMA20 + DI alignment
+        if direction is None:
+            if psar_bull and close > ema20 and plus_di.iloc[-1] > minus_di.iloc[-1]:
+                direction = Signal.BUY
+            elif psar_bear and close < ema20 and minus_di.iloc[-1] > plus_di.iloc[-1]:
+                direction = Signal.SELL
 
         if direction is None:
             return None  # No PSAR + EMA alignment → no trade
 
-        # Also require structure bias to not contradict
+        # Structure should not strongly contradict (relaxed: allow NEUTRAL)
         if (direction == Signal.BUY and structure.bias == Bias.BEARISH) or \
            (direction == Signal.SELL and structure.bias == Bias.BULLISH):
-            return None  # Structure contradicts PSAR signal
+            return None  # Structure contradicts signal
 
         # Score confluence
         conf_score, reasons = self.scorer.score(
@@ -569,7 +635,7 @@ class ChastiefollAgent:
         if conf_score < self.MINIMUM_CONFLUENCE_SCORE:
             return None  # Not enough confirmation
 
-        # Calculate entry, SL, TP
+        # Calculate entry, SL, TP — ATR multiplier increased to 2.0 for wider stops
         sl_distance = atr_val * atr_multiplier_sl
 
         if direction == Signal.BUY:

@@ -90,7 +90,7 @@ class PositionSizer:
                  risk_pct:         float = 1.0,      # % balance to risk
                  max_risk_pct:     float = 2.0,       # hard cap
                  max_lots:         float = 5.0,
-                 min_lots:         float = 1.0,    # cTrader FIX demo server min = 1.0 lot
+                 min_lots:         float = 0.01,   # proper micro lot minimum
                  leverage:         int   = 100,
                  pip_value_per_lot: float = 10.0,     # USD per pip per standard lot
                  model:            RiskModel = RiskModel.FIXED_PERCENT):
@@ -351,13 +351,16 @@ class GoldSessionFilter:
     """
 
     SESSIONS = {
-        "London_Open_Killzone":   (7, 0,  9, 0),    # 07:00-09:00 UTC
-        "New_York_Open_Killzone": (12, 0, 14, 0),   # 12:00-14:00 UTC
+        "London_Open_Killzone":   (7, 0,  9, 0),    # 07:00-09:00 UTC (highest prob)
+        "London_Session":         (7, 0, 16, 0),    # 07:00-16:00 UTC (full London)
+        "New_York_Open_Killzone": (12, 0, 14, 0),   # 12:00-14:00 UTC (highest prob)
+        "New_York_Session":       (12, 0, 21, 0),   # 12:00-21:00 UTC (full NY)
+        "London_NY_Overlap":      (12, 0, 16, 0),   # 12:00-16:00 UTC (best liquidity)
         "London_Close":           (15, 0, 17, 0),   # 15:00-17:00 UTC
         "Asian_Range":            (0, 0,  5, 0),    # 00:00-05:00 UTC (low vol)
     }
 
-    HIGH_PROBABILITY = ["London_Open_Killzone", "New_York_Open_Killzone"]
+    HIGH_PROBABILITY = ["London_Session", "New_York_Session"]
 
     def is_active(self, utc_hour: int, utc_minute: int = 0,
                   high_prob_only: bool = True) -> tuple[bool, str]:
