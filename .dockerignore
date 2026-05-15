@@ -1,0 +1,45 @@
+# ── Git ──
+.git
+.gitignore
+
+# ── Python ──
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Environment ──
+.env
+.env.local
+
+# ── Docker ──
+docker-compose.yml
+Dockerfile
+
+# ── Logs & Data ──
+logs/
+trade_data/
+*.log
+trade_log.json
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Docs (not needed in image) ──
+*.md
+!README.md
+SRS/
+Requirement/
+Agent/

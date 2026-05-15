@@ -1,0 +1,89 @@
+# ═══════════════════════════════════════════════════════════════
+# CHASTIEFOL — Docker Compose
+# Services: Agent + PostgreSQL + Redis (optional cache)
+# Usage: docker-compose up -d
+# ═══════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+  # ── Main Trading Agent ──
+  chastiefol:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: chastiefol-agent
+    restart: unless-stopped
+    ports:
+      - "${WEBHOOK_PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://chastiefol:chastiefol_pass@postgres:5432/chastiefol
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./trade_data:/app/trade_data
+    networks:
+      - chastiefol-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── PostgreSQL Database ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: chastiefol-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chastiefol
+      POSTGRES_PASSWORD: chastiefol_pass
+      POSTGRES_DB: chastiefol
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./Database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - chastiefol-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chastiefol"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis Cache (optional — for rate limiting & caching) ──
+  redis:
+    image: redis:7-alpine
+    container_name: chastiefol-cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - chastiefol-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  chastiefol-net:
+    driver: bridge
