@@ -29,8 +29,9 @@ colorlog>=6.7
 # ══════════════════════════════════════════════
 
 # ── Database (trade history persistence) ──
-# aiosqlite>=0.19
-# sqlalchemy>=2.0
+sqlalchemy>=2.0
+asyncpg>=0.29
+# aiosqlite>=0.19          # SQLite async (alternative to PostgreSQL)
 
 # ── LLM / AI Agent (for AI insight generation) ──
 # langchain>=0.1
