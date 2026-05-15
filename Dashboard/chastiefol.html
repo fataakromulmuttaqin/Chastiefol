@@ -272,11 +272,11 @@ h1{animation-delay:.2s}
 <div id="page-home" class="page active">
   <div class="price-ticker">
     <span>XAUUSD</span>
-    <span class="price-val" id="live-price">4,540.00</span>
-    <span class="price-change" id="live-change">▲ +0.42%</span>
+    <span class="price-val" id="live-price">3,250.00</span>
+    <span class="price-change" id="live-change">▲ +0.00%</span>
     <span style="color:var(--text3);margin-left:20px">Session:</span>
     <span id="session-name" style="color:var(--gold)">London Open Killzone</span>
-    <span style="color:var(--text3);margin-left:auto">Last signal: BUY @ 4525.50 · Confidence 78%</span>
+    <span style="color:var(--text3);margin-left:auto">Last signal: — · Demo Mode</span>
   </div>
   <div class="hero">
     <div class="hero-grid"></div>
@@ -1144,12 +1144,13 @@ function showPage(id){
   if(id==='dashboard')initChart();
 }
 
-// Live price sim
-let basePrice=4540.00;
+// Live price sim (demo only — connect to /api/status for real data)
+// TODO: Replace with fetch('/api/status') from dashboard_api.py (port 3001)
+let basePrice=3250.00;
 function tickPrice(){
   const delta=(Math.random()-.48)*1.2;
-  basePrice=Math.max(4400,Math.min(4700,basePrice+delta));
-  const change=((basePrice-4540.00)/4540.00*100).toFixed(2);
+  basePrice=Math.max(3100,Math.min(3400,basePrice+delta));
+  const change=((basePrice-3250.00)/3250.00*100).toFixed(2);
   const el=document.getElementById('live-price');
   const cel=document.getElementById('live-change');
   if(el)el.textContent=basePrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
