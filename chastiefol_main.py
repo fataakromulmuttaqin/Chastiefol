@@ -601,20 +601,18 @@ class ChastiefollIntegrated:
             )
 
         elif self.config.execution_method == "fix" and self.ctrader_fix:
-            # cTrader FIX execution
-            client_id = self.ctrader_fix.buy(
-                self.config.symbol, volume,
-                stop_loss=stop_loss, take_profit=take_profit,
-            ) if side == OrderSide.BUY else self.ctrader_fix.sell(
-                self.config.symbol, volume,
-                stop_loss=stop_loss, take_profit=take_profit,
+            # cTrader FIX execution — wait for broker confirmation
+            order_result = await self.ctrader_fix.execute_order(
+                symbol=self.config.symbol,
+                side=side.value,
+                volume=volume,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
             )
-            order_result = OrderResult(
-                success=True,
-                order_id=client_id,
-                execution_price=entry,
-                filled_volume=volume,
-            )
+            if not order_result.get("success"):
+                log.error(f"FIX order failed: {order_result.get('text')}")
+                await self._notify_error(f"FIX order failed: {order_result.get('text')}")
+                return
 
         else:
             log.error("No execution method available!")
@@ -622,22 +620,22 @@ class ChastiefollIntegrated:
             return
 
         # Handle result
-        if order_result and order_result.success:
+        if order_result and order_result.get("success"):
             # Track trade locally
             trade = TradeLifecycle(
-                entry_price=order_result.execution_price or entry,
+                entry_price=order_result.get("execution_price") or entry,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                lot_size=volume,
+                lot_size=order_result.get("filled_volume") or volume,
                 direction=side.value,
-                current_price=order_result.execution_price or entry,
+                current_price=order_result.get("execution_price") or entry,
             )
             self.open_trades.append(trade)
             self.account.open_trades = len(self.open_trades)
 
-            log.info(f"✓ Order filled: {side.value} {volume} lots @ "
-                     f"{order_result.execution_price or entry:.2f} "
-                     f"(ID: {order_result.order_id})")
+            log.info(f"✓ Order filled: {side.value} {order_result.get('filled_volume') or volume} lots @ "
+                     f"{order_result.get('execution_price') or entry:.2f} "
+                     f"(ID: {order_result.get('order_id')})")
 
             # Notify
             if self.telegram:

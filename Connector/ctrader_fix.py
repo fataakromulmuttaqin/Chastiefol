@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Callable, List
 from enum import Enum
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -647,6 +648,7 @@ class CTraderFIXConnector:
         # State
         self._latest_quotes: Dict[str, Dict] = {}
         self._execution_history: List[Dict] = []
+        self._pending_executions: Dict[str, Optional[Dict]] = {}
 
         # Wire up callbacks
         self.price_conn.on_market_data = self._on_market_data
@@ -716,3 +718,87 @@ class CTraderFIXConnector:
     def _on_execution(self, report: Dict):
         """Callback for execution reports."""
         self._execution_history.append(report)
+        # Store in pending dict for wait_for_execution
+        client_id = report.get("client_order_id", "")
+        if client_id:
+            self._pending_executions[client_id] = report
+
+    async def execute_order(
+        self,
+        symbol: str,
+        side: str,
+        volume: float,
+        order_type: str = "MARKET",
+        price: float = 0.0,
+        stop_loss: float = 0.0,
+        take_profit: float = 0.0,
+        timeout: float = 10.0,
+    ) -> Dict:
+        """
+        Send order and wait for broker execution confirmation.
+        Returns execution report dict with keys:
+            success: bool
+            order_id: str (broker's OrderID)
+            execution_price: float
+            filled_volume: float
+            text: str (error message if rejected)
+        """
+        import asyncio
+
+        client_id = f"CHAST_{uuid.uuid4().hex[:12]}"
+        self._pending_executions[client_id] = None
+
+        # Send order
+        self.trade_conn.send_new_order(
+            symbol, side.upper(), volume, order_type, price, stop_loss, take_profit,
+            client_order_id=client_id,
+        )
+        log.info(f"[TRADE] Order sent: {side.upper()} {volume} {symbol} | ClientID={client_id}")
+
+        # Wait for execution report
+        start = time.time()
+        while time.time() - start < timeout:
+            result = self._pending_executions.get(client_id)
+            if result is not None:
+                del self._pending_executions[client_id]
+                exec_type = result.get("exec_type", "")
+                if exec_type == "F":
+                    log.info(f"[TRADE] Order CONFIRMED by broker: {result['side']} {result['filled_qty']} {result['symbol']} @ {result['avg_price']} | BrokerID={result['order_id']}")
+                    return {
+                        "success": True,
+                        "order_id": result.get("order_id", client_id),
+                        "execution_price": float(result.get("avg_price") or 0),
+                        "filled_volume": float(result.get("filled_qty") or 0),
+                        "text": "",
+                    }
+                elif exec_type == "8":
+                    log.error(f"[TRADE] Order REJECTED by broker: {result.get('text')}")
+                    return {
+                        "success": False,
+                        "order_id": client_id,
+                        "execution_price": 0,
+                        "filled_volume": 0,
+                        "text": result.get("text", "Order rejected by broker"),
+                    }
+            await asyncio.sleep(0.1)
+
+        # Timeout — order pending but no confirmation
+        log.warning(f"[TRADE] Order PENDING (no confirm in {timeout}s): {client_id}")
+        return {
+            "success": False,
+            "order_id": client_id,
+            "execution_price": 0,
+            "filled_volume": 0,
+            "text": f"Timeout waiting for broker confirmation ({timeout}s)",
+        }
+
+    async def wait_for_fill(self, client_order_id: str, timeout: float = 10.0) -> Dict:
+        """Wait for a specific order to be filled."""
+        start = time.time()
+        while time.time() - start < timeout:
+            result = self._pending_executions.get(client_order_id)
+            if result is not None:
+                del self._pending_executions[client_order_id]
+                return result
+            await asyncio.sleep(0.1)
+        return {}
