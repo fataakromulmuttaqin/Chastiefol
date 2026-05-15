@@ -1,22 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// CHASTIEFOL — XAUUSD Automated Trading Strategy
-// Version: 1.0 | Pine Script v6
+// CHASTIEFOL — XAUUSD Technical Indicator
+// Version: 2.0 | Pine Script v6
+// Type: indicator() — pure visualization + webhook alerts
 // Primary: Parabolic SAR + EMA 20/50/100/200 Alignment
 // Confirmation: RSI, MACD, Bollinger Bands, ATR, Volume
 // Output: Webhook JSON alerts to Chastiefol Agent
 // ═══════════════════════════════════════════════════════════════════════════════
 
 //@version=6
-strategy("Chastiefol XAUUSD [PSAR + EMA]", 
-     overlay=true, 
-     default_qty_type=strategy.percent_of_equity,
-     default_qty_value=1,
-     initial_capital=10000,
-     commission_type=strategy.commission.cash_per_order,
-     commission_value=0.5,
-     slippage=2,
-     pyramiding=1,
-     calc_on_every_tick=false)
+indicator("Chastiefol XAUUSD [PSAR + EMA] v2",
+     overlay=true,
+     max_lines_count=500,
+     max_labels_count=500)
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -58,12 +53,11 @@ vol_ma_len = input.int(20, "Volume MA Period", group=grp_vol)
 vol_mult   = input.float(1.2, "Volume Threshold Multiplier", step=0.1, group=grp_vol)
 use_vol    = input.bool(false, "Use Volume Confirmation", group=grp_vol)
 
-// ── Risk Management ──
+// ── Risk Management (for webhook payload) ──
 grp_risk  = "═══ RISK MANAGEMENT ═══"
 atr_len    = input.int(14, "ATR Period", group=grp_risk)
 sl_atr_mult = input.float(1.5, "SL ATR Multiplier", step=0.1, group=grp_risk)
 tp_rr       = input.float(2.0, "Take Profit R:R Ratio", step=0.1, group=grp_risk)
-use_trailing = input.bool(true, "Use Trailing Stop (PSAR)", group=grp_risk)
 
 // ── Session Filter ──
 grp_sess  = "═══ SESSION FILTER ═══"
@@ -88,10 +82,10 @@ webhook_enabled = input.bool(true, "Enable Webhook Alerts", group=grp_webhook)
 
 // ── Parabolic SAR ──
 psar_value = ta.sar(psar_start, psar_inc, psar_max)
-psar_bull  = close > psar_value   // PSAR below price = bullish
-psar_bear  = close < psar_value   // PSAR above price = bearish
-psar_flip_bull = psar_bull and not psar_bull[1]  // PSAR just flipped bullish
-psar_flip_bear = psar_bear and not psar_bear[1]  // PSAR just flipped bearish
+psar_bull  = close > psar_value
+psar_bear  = close < psar_value
+psar_flip_bull = psar_bull and not psar_bull[1]
+psar_flip_bear = psar_bear and not psar_bear[1]
 
 // ── EMAs ──
 ema20  = ta.ema(close, ema20_len)
@@ -118,8 +112,8 @@ ema20_falling = ema20 < ema20[3]
 
 // ── RSI ──
 rsi_val = ta.rsi(close, rsi_len)
-rsi_bull_confirm = rsi_val > 50 and rsi_val < rsi_ob    // Bullish momentum, not overbought
-rsi_bear_confirm = rsi_val < 50 and rsi_val > rsi_os    // Bearish momentum, not oversold
+rsi_bull_confirm = rsi_val > 50 and rsi_val < rsi_ob
+rsi_bear_confirm = rsi_val < 50 and rsi_val > rsi_os
 rsi_overbought   = rsi_val >= rsi_ob
 rsi_oversold     = rsi_val <= rsi_os
 
@@ -132,13 +126,13 @@ macd_bear_cross   = ta.crossunder(macd_line, signal_line)
 
 // ── Bollinger Bands ──
 [bb_upper, bb_basis, bb_lower] = ta.bb(close, bb_len, bb_mult)
-bb_bull_confirm = close > bb_basis and close < bb_upper  // Above middle, room to grow
-bb_bear_confirm = close < bb_basis and close > bb_lower  // Below middle, room to fall
-bb_squeeze      = (bb_upper - bb_lower) / bb_basis < 0.02  // Volatility squeeze
+bb_bull_confirm = close > bb_basis and close < bb_upper
+bb_bear_confirm = close < bb_basis and close > bb_lower
+bb_squeeze      = (bb_upper - bb_lower) / bb_basis < 0.02
 
 // ── Volume ──
 vol_ma       = ta.sma(volume, vol_ma_len)
-vol_confirm  = volume > vol_ma * vol_mult  // Above-average volume
+vol_confirm  = volume > vol_ma * vol_mult
 
 // ── ATR (for SL/TP calculation) ──
 atr_val = ta.atr(atr_len)
@@ -157,9 +151,9 @@ is_ny_session() =>
 is_asia_session() =>
     hour(time, "UTC") >= 0 and hour(time, "UTC") < 8
 
-bool session_active = not use_session or 
-     (sess_london and is_london_session()) or 
-     (sess_ny and is_ny_session()) or 
+bool session_active = not use_session or
+     (sess_london and is_london_session()) or
+     (sess_ny and is_ny_session()) or
      (sess_asia and is_asia_session())
 
 
@@ -170,13 +164,13 @@ bool session_active = not use_session or
 // Count bullish confluence factors
 var int bull_score = 0
 bull_score := 0
-bull_score += psar_bull ? 1 : 0                              // PSAR bullish
-bull_score += ema_bull_align ? 1 : 0                         // EMA perfect order
-bull_score += price_above_all ? 1 : 0                        // Price > all EMAs
-bull_score += use_rsi and rsi_bull_confirm ? 1 : 0           // RSI confirms
-bull_score += use_macd and macd_bull_confirm ? 1 : 0         // MACD confirms
-bull_score += use_bb and bb_bull_confirm ? 1 : 0             // BB confirms
-bull_score += use_vol and vol_confirm ? 1 : 0                // Volume confirms
+bull_score += psar_bull ? 1 : 0
+bull_score += ema_bull_align ? 1 : 0
+bull_score += price_above_all ? 1 : 0
+bull_score += use_rsi and rsi_bull_confirm ? 1 : 0
+bull_score += use_macd and macd_bull_confirm ? 1 : 0
+bull_score += use_bb and bb_bull_confirm ? 1 : 0
+bull_score += use_vol and vol_confirm ? 1 : 0
 
 // Count bearish confluence factors
 var int bear_score = 0
@@ -198,38 +192,32 @@ bear_score += use_vol and vol_confirm ? 1 : 0
 var int bars_since_signal = 999
 
 // ── PRIMARY ENTRY CONDITIONS ──
-// BUY: PSAR flip bullish + Price > all EMAs + EMA bull alignment
 buy_primary  = psar_flip_bull and price_above_all and ema_bull_align
-// SELL: PSAR flip bearish + Price < all EMAs + EMA bear alignment
 sell_primary = psar_flip_bear and price_below_all and ema_bear_align
 
-// ── ALTERNATIVE ENTRY (less strict — PSAR flip with partial EMA) ──
-// BUY: PSAR flip + price above at least EMA20 & EMA50 + EMA20 rising
+// ── ALTERNATIVE ENTRY ──
 buy_alt  = psar_flip_bull and close > ema20 and close > ema50 and ema20_rising
-// SELL: PSAR flip + price below at least EMA20 & EMA50 + EMA20 falling  
 sell_alt = psar_flip_bear and close < ema20 and close < ema50 and ema20_falling
 
-// ── FINAL SIGNAL (with confluence & session filter) ──
-buy_signal  = (buy_primary or (buy_alt and bull_score >= min_confluence)) and 
+// ── FINAL SIGNAL ──
+buy_signal  = (buy_primary or (buy_alt and bull_score >= min_confluence)) and
                session_active and bars_since_signal >= cooldown_bars and
                bull_score >= min_confluence
 
-sell_signal = (sell_primary or (sell_alt and bear_score >= min_confluence)) and 
+sell_signal = (sell_primary or (sell_alt and bear_score >= min_confluence)) and
                session_active and bars_since_signal >= cooldown_bars and
                bear_score >= min_confluence
 
 // ── CLOSE CONDITIONS ──
-// Close BUY: PSAR flips bearish OR price crosses below EMA200
-close_buy  = (strategy.position_size > 0) and (psar_flip_bear or close < ema200)
-// Close SELL: PSAR flips bullish OR price crosses above EMA200
-close_sell = (strategy.position_size < 0) and (psar_flip_bull or close > ema200)
+close_buy  = psar_flip_bear or close < ema200
+close_sell = psar_flip_bull or close > ema200
 
 // Update cooldown
 bars_since_signal := buy_signal or sell_signal ? 0 : bars_since_signal + 1
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SL / TP CALCULATION
+// SL / TP CALCULATION (for webhook payload)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 sl_distance = atr_val * sl_atr_mult
@@ -240,53 +228,24 @@ buy_tp  = close + tp_distance
 sell_sl = close + sl_distance
 sell_tp = close - tp_distance
 
-// Convert to pips (XAUUSD: 1 pip = $0.01)
 sl_pips = math.round(sl_distance / 0.01)
 tp_pips = math.round(tp_distance / 0.01)
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// STRATEGY EXECUTION
+// WEBHOOK ALERTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-if buy_signal
-    strategy.entry("BUY", strategy.long, comment="PSAR_EMA_BUY")
-    if use_trailing
-        strategy.exit("BUY_EXIT", "BUY", stop=buy_sl, limit=buy_tp, 
-                      trail_points=math.round(sl_distance / syminfo.mintick / 2), 
-                      trail_offset=math.round(sl_distance / syminfo.mintick / 4))
-    else
-        strategy.exit("BUY_EXIT", "BUY", stop=buy_sl, limit=buy_tp)
-
-if sell_signal
-    strategy.entry("SELL", strategy.short, comment="PSAR_EMA_SELL")
-    if use_trailing
-        strategy.exit("SELL_EXIT", "SELL", stop=sell_sl, limit=sell_tp,
-                      trail_points=math.round(sl_distance / syminfo.mintick / 2),
-                      trail_offset=math.round(sl_distance / syminfo.mintick / 4))
-    else
-        strategy.exit("SELL_EXIT", "SELL", stop=sell_sl, limit=sell_tp)
-
-if close_buy
-    strategy.close("BUY", comment="PSAR_FLIP_CLOSE")
-
-if close_sell
-    strategy.close("SELL", comment="PSAR_FLIP_CLOSE")
-
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// WEBHOOK ALERTS (JSON payload for Chastiefol Agent)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Alert conditions
 if webhook_enabled and buy_signal
     alert('{"action":"BUY","symbol":"XAUUSD","volume":0.01,"sl_pips":' + str.tostring(sl_pips) + ',"tp_pips":' + str.tostring(tp_pips) + ',"comment":"PSAR_EMA_Strategy","confluence":' + str.tostring(bull_score) + ',"psar":' + str.tostring(math.round(psar_value, 2)) + ',"entry":' + str.tostring(math.round(close, 2)) + '}', alert.freq_once_per_bar)
 
 if webhook_enabled and sell_signal
     alert('{"action":"SELL","symbol":"XAUUSD","volume":0.01,"sl_pips":' + str.tostring(sl_pips) + ',"tp_pips":' + str.tostring(tp_pips) + ',"comment":"PSAR_EMA_Strategy","confluence":' + str.tostring(bear_score) + ',"psar":' + str.tostring(math.round(psar_value, 2)) + ',"entry":' + str.tostring(math.round(close, 2)) + '}', alert.freq_once_per_bar)
 
-if webhook_enabled and (close_buy or close_sell)
-    alert('{"action":"CLOSE","symbol":"XAUUSD","volume":0,"sl_pips":0,"tp_pips":0,"comment":"PSAR_FLIP_EXIT"}', alert.freq_once_per_bar)
+if webhook_enabled and (buy_signal[1] or sell_signal[1])
+    // Close alert — triggered when a prior signal closes due to PSAR flip or EMA200 cross
+    string close_action = close_buy ? "BUY" : "SELL"
+    alert('{"action":"CLOSE","symbol":"XAUUSD","volume":0,"sl_pips":0,"tp_pips":0,"comment":"PSAR_FLIP_OR_EMA200_EXIT"}', alert.freq_once_per_bar)
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -299,27 +258,31 @@ plot(ema50, "EMA 50", color=color.new(#FFA502, 0), linewidth=1)
 plot(ema100, "EMA 100", color=color.new(#1E90FF, 0), linewidth=2)
 plot(ema200, "EMA 200", color=color.new(#7C3AED, 0), linewidth=2)
 
+// ── Bollinger Bands ──
+plot(use_bb ? bb_upper : na, "BB Upper", color=color.new(#FFD700, 20), linewidth=1)
+plot(use_bb ? bb_basis : na, "BB Middle", color=color.new(#FFD700, 40), linewidth=1, style=plot.style_circles)
+plot(use_bb ? bb_lower : na, "BB Lower", color=color.new(#FFD700, 20), linewidth=1)
+
 // ── Parabolic SAR ──
-psar_color = psar_bull ? color.new(#00C853, 30) : color.new(#FF1744, 30)
+psar_color = psar_bull ? color.new(#00C853, 0) : color.new(#FF1744, 0)
 plot(psar_value, "PSAR", style=plot.style_circles, color=psar_color, linewidth=2)
 
 // ── Signal Markers ──
-plotshape(buy_signal, "BUY Signal", shape.triangleup, location.belowbar, 
+plotshape(buy_signal, "BUY Signal", shape.triangleup, location.belowbar,
           color=color.new(#00C853, 0), size=size.normal)
-plotshape(sell_signal, "SELL Signal", shape.triangledown, location.abovebar, 
+plotshape(sell_signal, "SELL Signal", shape.triangledown, location.abovebar,
           color=color.new(#FF1744, 0), size=size.normal)
 
 // ── Close Markers ──
-plotshape(close_buy, "Close BUY", shape.xcross, location.abovebar, 
+plotshape(close_buy, "Close BUY", shape.xcross, location.abovebar,
           color=color.new(#FFA502, 0), size=size.small)
-plotshape(close_sell, "Close SELL", shape.xcross, location.belowbar, 
+plotshape(close_sell, "Close SELL", shape.xcross, location.belowbar,
           color=color.new(#FFA502, 0), size=size.small)
 
 // ── Background: Session Active ──
 bgcolor(use_session and session_active ? color.new(#2196F3, 90) : na)
 
 // ── Background: EMA Alignment ──
-// Ternary returns bgcolor-compatible color per bar (v6 expression, not if-block)
 ema_bg = ema_bull_align ? color.new(#00C853, 90) : ema_bear_align ? color.new(#FF1744, 90) : na
 bgcolor(ema_bg)
 
@@ -328,60 +291,51 @@ bgcolor(ema_bg)
 // INFO TABLE (Dashboard on Chart)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-var table info_table = table.new(position.top_right, 2, 10, 
+var table info_table = table.new(position.top_right, 2, 10,
      bgcolor=color.new(#1a1a2e, 10), border_color=color.new(#333333, 0), border_width=1)
 
 if barstate.islast
-    // Header
-    table.cell(info_table, 0, 0, "CHASTIEFOL", text_color=color.white, 
+    table.cell(info_table, 0, 0, "CHASTIEFOL v2", text_color=color.white,
                text_size=size.small, bgcolor=color.new(#7C3AED, 20))
-    table.cell(info_table, 1, 0, "XAUUSD", text_color=color.white, 
+    table.cell(info_table, 1, 0, "XAUUSD", text_color=color.white,
                text_size=size.small, bgcolor=color.new(#7C3AED, 20))
-    
-    // PSAR Status
+
     table.cell(info_table, 0, 1, "PSAR", text_color=color.gray, text_size=size.tiny)
-    table.cell(info_table, 1, 1, psar_bull ? "▲ BULL" : "▼ BEAR", 
+    table.cell(info_table, 1, 1, psar_bull ? "▲ BULL" : "▼ BEAR",
                text_color=psar_bull ? color.green : color.red, text_size=size.tiny)
-    
-    // EMA Alignment
+
     table.cell(info_table, 0, 2, "EMA Order", text_color=color.gray, text_size=size.tiny)
     string ema_status = ema_bull_align ? "✓ BULL" : ema_bear_align ? "✓ BEAR" : "— MIXED"
     color ema_clr = ema_bull_align ? color.green : ema_bear_align ? color.red : color.gray
     table.cell(info_table, 1, 2, ema_status, text_color=ema_clr, text_size=size.tiny)
-    
-    // RSI
+
     table.cell(info_table, 0, 3, "RSI(14)", text_color=color.gray, text_size=size.tiny)
     color rsi_clr = rsi_val > 60 ? color.green : rsi_val < 40 ? color.red : color.gray
-    table.cell(info_table, 1, 3, str.tostring(math.round(rsi_val, 1)), 
+    table.cell(info_table, 1, 3, str.tostring(math.round(rsi_val, 1)),
                text_color=rsi_clr, text_size=size.tiny)
-    
-    // MACD
+
     table.cell(info_table, 0, 4, "MACD", text_color=color.gray, text_size=size.tiny)
-    table.cell(info_table, 1, 4, macd_bull_confirm ? "▲ Bull" : macd_bear_confirm ? "▼ Bear" : "— Flat", 
-               text_color=macd_bull_confirm ? color.green : macd_bear_confirm ? color.red : color.gray, 
+    table.cell(info_table, 1, 4, macd_bull_confirm ? "▲ Bull" : macd_bear_confirm ? "▼ Bear" : "— Flat",
+               text_color=macd_bull_confirm ? color.green : macd_bear_confirm ? color.red : color.gray,
                text_size=size.tiny)
-    
-    // Confluence Score
+
     table.cell(info_table, 0, 5, "Bull Score", text_color=color.gray, text_size=size.tiny)
-    table.cell(info_table, 1, 5, str.tostring(bull_score) + "/7", 
+    table.cell(info_table, 1, 5, str.tostring(bull_score) + "/7",
                text_color=bull_score >= min_confluence ? color.green : color.gray, text_size=size.tiny)
-    
+
     table.cell(info_table, 0, 6, "Bear Score", text_color=color.gray, text_size=size.tiny)
-    table.cell(info_table, 1, 6, str.tostring(bear_score) + "/7", 
+    table.cell(info_table, 1, 6, str.tostring(bear_score) + "/7",
                text_color=bear_score >= min_confluence ? color.red : color.gray, text_size=size.tiny)
-    
-    // ATR
+
     table.cell(info_table, 0, 7, "ATR(14)", text_color=color.gray, text_size=size.tiny)
-    table.cell(info_table, 1, 7, "$" + str.tostring(math.round(atr_val, 2)), 
+    table.cell(info_table, 1, 7, "$" + str.tostring(math.round(atr_val, 2)),
                text_color=color.white, text_size=size.tiny)
-    
-    // SL/TP
+
     table.cell(info_table, 0, 8, "SL/TP pips", text_color=color.gray, text_size=size.tiny)
-    table.cell(info_table, 1, 8, str.tostring(sl_pips) + " / " + str.tostring(tp_pips), 
+    table.cell(info_table, 1, 8, str.tostring(sl_pips) + " / " + str.tostring(tp_pips),
                text_color=color.white, text_size=size.tiny)
-    
-    // Session
+
     table.cell(info_table, 0, 9, "Session", text_color=color.gray, text_size=size.tiny)
     string sess_str = is_london_session() ? "London" : is_ny_session() ? "New York" : is_asia_session() ? "Asia" : "Off"
-    table.cell(info_table, 1, 9, sess_str, 
+    table.cell(info_table, 1, 9, sess_str,
                text_color=session_active ? color.green : color.red, text_size=size.tiny)
