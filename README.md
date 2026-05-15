@@ -582,7 +582,7 @@ MIT License — See [LICENSE](LICENSE) for details.
 
 ## 👤 Author
 
-**Fata Akrom Ul Muttaqin**
+**Fata Akromul Muttaqin**
 
 - GitHub: [@fataakromulmuttaqin](https://github.com/fataakromulmuttaqin)
 
