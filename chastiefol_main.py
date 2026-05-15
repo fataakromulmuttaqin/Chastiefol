@@ -276,7 +276,7 @@ class ChastiefollIntegrated:
         else:
             log.warning("⚠ No data feed API keys — using synthetic data")
 
-        # 3. Initialize cTrader Connector
+        # 3. Initialize cTrader Connector + Sync Account Balance
         if not self.config.paper_mode:
             if self.config.execution_method == "mcp" and self.config.ctrader_access_token:
                 mcp_config = MCPConfig(
@@ -288,6 +288,8 @@ class ChastiefollIntegrated:
                 connected = await self.ctrader_mcp.connect()
                 if connected:
                     log.info("✓ cTrader MCP connected")
+                    # ── SYNC ACCOUNT FROM BROKER ──
+                    await self._sync_account_from_broker()
                 else:
                     log.error("✗ cTrader MCP connection failed")
                     await self._notify_error("cTrader MCP connection failed")
@@ -307,11 +309,13 @@ class ChastiefollIntegrated:
                 if connected:
                     self.ctrader_fix.subscribe(self.config.symbol)
                     log.info("✓ cTrader FIX connected")
+                    # ── SYNC ACCOUNT FROM BROKER ──
+                    await self._sync_account_from_broker()
                 else:
                     log.error("✗ cTrader FIX connection failed")
                     await self._notify_error("cTrader FIX connection failed")
         else:
-            log.info("✓ Paper mode — no broker connection needed")
+            log.info("✓ Paper mode — using INITIAL_BALANCE from .env")
 
         # 4. Initialize Webhook Listener
         if self.config.mode in (AgentMode.WEBHOOK, AgentMode.HYBRID):
@@ -471,6 +475,14 @@ class ChastiefollIntegrated:
         """Single autonomous analysis + decision cycle."""
         now = datetime.now(timezone.utc)
         log.info(f"--- Autonomous Cycle {now.strftime('%H:%M:%S UTC')} ---")
+
+        # Periodic account sync from broker (every cycle)
+        if self.ctrader_mcp and self.ctrader_mcp.is_connected and not self.config.paper_mode:
+            account_info = await self.ctrader_mcp.get_account_info()
+            if account_info:
+                self.account.balance = account_info.balance
+                self.account.equity = account_info.equity
+                self.account.update_peak()
 
         # Session filter
         active, sess_name = self.session_filter.is_active(now.hour, now.minute)
@@ -822,6 +834,64 @@ class ChastiefollIntegrated:
             "close": prices,
             "volume": np.abs(np.random.randn(n)) * 1000 + 500,
         })
+
+    # ──────────────────────────────────────────
+    # Account Sync from Broker
+    # ──────────────────────────────────────────
+
+    async def _sync_account_from_broker(self):
+        """
+        Sync account balance/equity from cTrader broker.
+        Called on startup and periodically to keep local state in sync.
+        Replaces the static INITIAL_BALANCE with real broker data.
+        """
+        account_info = None
+
+        # Try MCP first
+        if self.ctrader_mcp and self.ctrader_mcp.is_connected:
+            account_info = await self.ctrader_mcp.get_account_info()
+
+        if account_info:
+            old_balance = self.account.balance
+            self.account.balance = account_info.balance
+            self.account.equity = account_info.equity
+            self.account.peak_balance = max(account_info.balance, account_info.equity)
+            self.account.open_trades = 0  # Will be updated from positions
+
+            # Also get open positions count
+            positions = await self.ctrader_mcp.get_positions(self.config.symbol)
+            if positions:
+                self.account.open_trades = len(positions)
+
+            log.info(f"✓ Account synced from broker:")
+            log.info(f"    Balance:    ${self.account.balance:,.2f} (was ${old_balance:,.2f})")
+            log.info(f"    Equity:     ${self.account.equity:,.2f}")
+            log.info(f"    Margin:     ${account_info.margin_used:,.2f}")
+            log.info(f"    Free Margin:${account_info.free_margin:,.2f}")
+            log.info(f"    Leverage:   1:{account_info.leverage}")
+            log.info(f"    Open Pos:   {self.account.open_trades}")
+            log.info(f"    Account:    {'LIVE' if account_info.is_live else 'DEMO'}")
+
+            # Notify via Telegram
+            if self.telegram:
+                await self.telegram.send_raw(
+                    f"🔄 *ACCOUNT SYNCED*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Balance: `${self.account.balance:,.2f}`\n"
+                    f"Equity: `${self.account.equity:,.2f}`\n"
+                    f"Free Margin: `${account_info.free_margin:,.2f}`\n"
+                    f"Leverage: `1:{account_info.leverage}`\n"
+                    f"Open Positions: `{self.account.open_trades}`\n"
+                    f"Account Type: `{'LIVE' if account_info.is_live else 'DEMO'}`\n"
+                    f"\n_Synced from cTrader_"
+                )
+        else:
+            log.warning("⚠ Could not sync account from broker — using INITIAL_BALANCE")
+            if self.telegram:
+                await self.telegram.send_warning(
+                    f"Could not read account from cTrader.\n"
+                    f"Using fallback balance: ${self.account.balance:,.2f}"
+                )
 
     # ──────────────────────────────────────────
     # Notification Helpers
