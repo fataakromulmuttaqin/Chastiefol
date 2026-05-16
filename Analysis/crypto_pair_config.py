@@ -572,6 +572,257 @@ LAYER2_PAIRS = {
 }
 
 
+# ──────────────────────────────────────────────
+# Additional Spot + Futures Pairs (Binance)
+# These pairs are available on both Spot AND USDT-M Futures
+# ──────────────────────────────────────────────
+
+ADDITIONAL_SPOT_FUTURES_PAIRS = {
+    # ── Privacy / Storage / Misc ──
+    "ZEC/USDT": CryptoPairConfig(
+        symbol="ZEC/USDT", base_asset="ZEC", category=CryptoCategory.MID_CAP,
+        min_order_amount=0.001, amount_precision=3, price_precision=2,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=2,
+        avg_daily_range_pct=4.5, max_position_pct=4.0,
+    ),
+    "ENS/USDT": CryptoPairConfig(
+        symbol="ENS/USDT", base_asset="ENS", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=0.01, amount_precision=2, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=3,
+        avg_daily_range_pct=5.5, max_position_pct=4.0,
+    ),
+    "PENDLE/USDT": CryptoPairConfig(
+        symbol="PENDLE/USDT", base_asset="PENDLE", category=CryptoCategory.DEFI,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "STX/USDT": CryptoPairConfig(
+        symbol="STX/USDT", base_asset="STX", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=0.1, amount_precision=1, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
+        avg_daily_range_pct=5.5, max_position_pct=4.0,
+    ),
+    "ORDI/USDT": CryptoPairConfig(
+        symbol="ORDI/USDT", base_asset="ORDI", category=CryptoCategory.MID_CAP,
+        min_order_amount=0.01, amount_precision=2, price_precision=2,
+        atr_sl_multiplier=3.0, rr_target=2.5, min_fvg_pct=0.06, price_decimals=2,
+        avg_daily_range_pct=7.0, max_position_pct=3.0, is_volatile=True,
+    ),
+    "WLD/USDT": CryptoPairConfig(
+        symbol="WLD/USDT", base_asset="WLD", category=CryptoCategory.AI,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=3.0, rr_target=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=7.0, max_position_pct=3.0, is_volatile=True,
+    ),
+    "BLUR/USDT": CryptoPairConfig(
+        symbol="BLUR/USDT", base_asset="BLUR", category=CryptoCategory.MID_CAP,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.0, max_position_pct=3.0,
+    ),
+    "PYTH/USDT": CryptoPairConfig(
+        symbol="PYTH/USDT", base_asset="PYTH", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
+        avg_daily_range_pct=5.5, max_position_pct=4.0,
+    ),
+    "JTO/USDT": CryptoPairConfig(
+        symbol="JTO/USDT", base_asset="JTO", category=CryptoCategory.DEFI,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "ASTR/USDT": CryptoPairConfig(
+        symbol="ASTR/USDT", base_asset="ASTR", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=5,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=5,
+        avg_daily_range_pct=5.5, max_position_pct=4.0,
+    ),
+    "CAKE/USDT": CryptoPairConfig(
+        symbol="CAKE/USDT", base_asset="CAKE", category=CryptoCategory.DEFI,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=3,
+        avg_daily_range_pct=5.0, max_position_pct=4.0,
+    ),
+    "MASK/USDT": CryptoPairConfig(
+        symbol="MASK/USDT", base_asset="MASK", category=CryptoCategory.MID_CAP,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "CFX/USDT": CryptoPairConfig(
+        symbol="CFX/USDT", base_asset="CFX", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "ROSE/USDT": CryptoPairConfig(
+        symbol="ROSE/USDT", base_asset="ROSE", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=5,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=5,
+        avg_daily_range_pct=5.0, max_position_pct=4.0,
+    ),
+    "ZIL/USDT": CryptoPairConfig(
+        symbol="ZIL/USDT", base_asset="ZIL", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=5,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=5,
+        avg_daily_range_pct=5.0, max_position_pct=4.0,
+    ),
+    "ONDO/USDT": CryptoPairConfig(
+        symbol="ONDO/USDT", base_asset="ONDO", category=CryptoCategory.DEFI,
+        min_order_amount=0.1, amount_precision=1, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
+        avg_daily_range_pct=5.5, max_position_pct=4.0,
+    ),
+    "ENA/USDT": CryptoPairConfig(
+        symbol="ENA/USDT", base_asset="ENA", category=CryptoCategory.DEFI,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "W/USDT": CryptoPairConfig(
+        symbol="W/USDT", base_asset="W", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "NOT/USDT": CryptoPairConfig(
+        symbol="NOT/USDT", base_asset="NOT", category=CryptoCategory.MEME,
+        min_order_amount=100.0, amount_precision=0, price_precision=6,
+        atr_sl_multiplier=3.5, rr_target=3.0, min_confluence=52,
+        min_fvg_pct=0.08, price_decimals=6,
+        avg_daily_range_pct=9.0, max_position_pct=2.0, is_volatile=True,
+    ),
+    "IO/USDT": CryptoPairConfig(
+        symbol="IO/USDT", base_asset="IO", category=CryptoCategory.AI,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=3.0, rr_target=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=7.0, max_position_pct=3.0, is_volatile=True,
+    ),
+    "ZRO/USDT": CryptoPairConfig(
+        symbol="ZRO/USDT", base_asset="ZRO", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "PEOPLE/USDT": CryptoPairConfig(
+        symbol="PEOPLE/USDT", base_asset="PEOPLE", category=CryptoCategory.MEME,
+        min_order_amount=1.0, amount_precision=0, price_precision=5,
+        atr_sl_multiplier=3.0, rr_target=2.5, min_fvg_pct=0.07, price_decimals=5,
+        avg_daily_range_pct=7.0, max_position_pct=3.0, is_volatile=True,
+    ),
+    "TURBO/USDT": CryptoPairConfig(
+        symbol="TURBO/USDT", base_asset="TURBO", category=CryptoCategory.MEME,
+        min_order_amount=100.0, amount_precision=0, price_precision=7,
+        atr_sl_multiplier=3.5, rr_target=3.0, min_confluence=52,
+        min_fvg_pct=0.08, price_decimals=7,
+        avg_daily_range_pct=10.0, max_position_pct=2.0, is_volatile=True,
+    ),
+    "NEIRO/USDT": CryptoPairConfig(
+        symbol="NEIRO/USDT", base_asset="NEIRO", category=CryptoCategory.MEME,
+        min_order_amount=100.0, amount_precision=0, price_precision=7,
+        atr_sl_multiplier=3.5, rr_target=3.0, min_confluence=52,
+        min_fvg_pct=0.08, price_decimals=7,
+        avg_daily_range_pct=10.0, max_position_pct=2.0, is_volatile=True,
+    ),
+    "EIGEN/USDT": CryptoPairConfig(
+        symbol="EIGEN/USDT", base_asset="EIGEN", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "ETHFI/USDT": CryptoPairConfig(
+        symbol="ETHFI/USDT", base_asset="ETHFI", category=CryptoCategory.DEFI,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=6.5, max_position_pct=4.0,
+    ),
+    "BOME/USDT": CryptoPairConfig(
+        symbol="BOME/USDT", base_asset="BOME", category=CryptoCategory.MEME,
+        min_order_amount=100.0, amount_precision=0, price_precision=6,
+        atr_sl_multiplier=3.5, rr_target=3.0, min_confluence=52,
+        min_fvg_pct=0.08, price_decimals=6,
+        avg_daily_range_pct=9.0, max_position_pct=2.0, is_volatile=True,
+    ),
+    "SAGA/USDT": CryptoPairConfig(
+        symbol="SAGA/USDT", base_asset="SAGA", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=0.1, amount_precision=1, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "OMNI/USDT": CryptoPairConfig(
+        symbol="OMNI/USDT", base_asset="OMNI", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=0.01, amount_precision=2, price_precision=2,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=2,
+        avg_daily_range_pct=6.5, max_position_pct=4.0,
+    ),
+    "POL/USDT": CryptoPairConfig(
+        symbol="POL/USDT", base_asset="POL", category=CryptoCategory.LAYER2,
+        min_order_amount=1.0, amount_precision=1, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
+        avg_daily_range_pct=4.5, max_position_pct=5.0,
+    ),
+    "HMSTR/USDT": CryptoPairConfig(
+        symbol="HMSTR/USDT", base_asset="HMSTR", category=CryptoCategory.MEME,
+        min_order_amount=100.0, amount_precision=0, price_precision=6,
+        atr_sl_multiplier=3.5, rr_target=3.0, min_confluence=52,
+        min_fvg_pct=0.08, price_decimals=6,
+        avg_daily_range_pct=9.0, max_position_pct=2.0, is_volatile=True,
+    ),
+    "SCR/USDT": CryptoPairConfig(
+        symbol="SCR/USDT", base_asset="SCR", category=CryptoCategory.LAYER2,
+        min_order_amount=0.1, amount_precision=1, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "CATI/USDT": CryptoPairConfig(
+        symbol="CATI/USDT", base_asset="CATI", category=CryptoCategory.GAMING,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=3.0, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=7.0, max_position_pct=3.0, is_volatile=True,
+    ),
+    "ACT/USDT": CryptoPairConfig(
+        symbol="ACT/USDT", base_asset="ACT", category=CryptoCategory.AI,
+        min_order_amount=1.0, amount_precision=0, price_precision=5,
+        atr_sl_multiplier=3.0, rr_target=2.5, min_fvg_pct=0.07, price_decimals=5,
+        avg_daily_range_pct=8.0, max_position_pct=3.0, is_volatile=True,
+    ),
+    "PNUT/USDT": CryptoPairConfig(
+        symbol="PNUT/USDT", base_asset="PNUT", category=CryptoCategory.MEME,
+        min_order_amount=1.0, amount_precision=0, price_precision=5,
+        atr_sl_multiplier=3.5, rr_target=3.0, min_confluence=52,
+        min_fvg_pct=0.08, price_decimals=5,
+        avg_daily_range_pct=10.0, max_position_pct=2.0, is_volatile=True,
+    ),
+    "USUAL/USDT": CryptoPairConfig(
+        symbol="USUAL/USDT", base_asset="USUAL", category=CryptoCategory.DEFI,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.0, max_position_pct=4.0,
+    ),
+    "MOVE/USDT": CryptoPairConfig(
+        symbol="MOVE/USDT", base_asset="MOVE", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
+        avg_daily_range_pct=6.5, max_position_pct=4.0,
+    ),
+    "TRUMP/USDT": CryptoPairConfig(
+        symbol="TRUMP/USDT", base_asset="TRUMP", category=CryptoCategory.MEME,
+        min_order_amount=0.01, amount_precision=2, price_precision=2,
+        atr_sl_multiplier=3.5, rr_target=3.0, min_confluence=52,
+        min_fvg_pct=0.08, price_decimals=2,
+        avg_daily_range_pct=12.0, max_position_pct=2.0, is_volatile=True,
+    ),
+    "KAITO/USDT": CryptoPairConfig(
+        symbol="KAITO/USDT", base_asset="KAITO", category=CryptoCategory.AI,
+        min_order_amount=0.1, amount_precision=1, price_precision=3,
+        atr_sl_multiplier=3.0, rr_target=2.5, min_fvg_pct=0.06, price_decimals=3,
+        avg_daily_range_pct=7.0, max_position_pct=3.0, is_volatile=True,
+    ),
+}
+
+
 # ══════════════════════════════════════════════════════════════
 # MASTER REGISTRY
 # ══════════════════════════════════════════════════════════════
@@ -601,6 +852,8 @@ CRYPTO_CONFIGS: Dict[str, CryptoPairConfig] = {
     **GAMING_PAIRS,
     # Layer 2
     **LAYER2_PAIRS,
+    # Additional Spot + Futures pairs
+    **ADDITIONAL_SPOT_FUTURES_PAIRS,
 }
 
 
