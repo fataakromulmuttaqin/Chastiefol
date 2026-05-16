@@ -187,6 +187,7 @@ class FIXMessage:
 
     def __init__(self):
         self.fields: Dict[int, str] = {}
+        self._repeating_groups: Dict[int, List[str]] = {}
         self._seq_num = 0
 
     def set(self, tag: int, value) -> "FIXMessage":
@@ -195,6 +196,14 @@ class FIXMessage:
 
     def get(self, tag: int, default: str = "") -> str:
         return self.fields.get(tag, default)
+
+    def get_all(self, tag: int) -> List[str]:
+        """Get all values for a repeating group tag. Returns list of all values."""
+        return self._repeating_groups.get(tag, [])
+
+    def set_repeating_group(self, tag: int, values: List[str]):
+        """Store repeating group entries for a tag."""
+        self._repeating_groups[tag] = values
 
     def has(self, tag: int) -> bool:
         return tag in self.fields
@@ -251,13 +260,85 @@ class FIXMessage:
         """Parse a raw FIX message string into a FIXMessage object."""
         msg = FIXMessage()
         parts = raw.split(FIXMessage.SOH)
+
+        # Detect message type first
+        msg_type = ""
+        no_md_entry_types = 1  # Default for non-market-data messages
+
+        # Pre-scan for message type and NoMDEntryTypes
         for part in parts:
             if "=" in part:
                 tag_str, value = part.split("=", 1)
                 try:
-                    msg.fields[int(tag_str)] = value
+                    tag = int(tag_str)
+                    if tag == 35:
+                        msg_type = value
                 except ValueError:
                     pass
+
+        # Handle repeating groups for Market Data messages (W=Snapshot, X=Incremental)
+        if msg_type in ("W", "X"):
+            # Parse with repeating group awareness
+            i = 0
+            while i < len(parts):
+                part = parts[i]
+                if "=" not in part:
+                    i += 1
+                    continue
+                tag_str, value = part.split("=", 1)
+                try:
+                    tag = int(tag_str)
+                except ValueError:
+                    i += 1
+                    continue
+
+                # Detect NoMDEntryTypes (tag 267) to know group size
+                if tag == 267:
+                    no_md_entry_types = int(value) if value else 1
+                    msg.fields[tag] = value
+                    i += 1
+                    continue
+
+                # For repeating group tags 269 and 270 within market data,
+                # collect all entries as a repeating group
+                if tag in (269, 270):
+                    # Check if this is part of the MDEntry repeating group
+                    # Tag 267=NoMDEntryTypes precedes the group
+                    # Tags 269 and 270 repeat `no_md_entry_types` times
+                    group_entries = []
+                    for _ in range(no_md_entry_types):
+                        if i >= len(parts):
+                            break
+                        gp = parts[i]
+                        if "=" not in gp:
+                            i += 1
+                            continue
+                        gt, gv = gp.split("=", 1)
+                        try:
+                            gti = int(gt)
+                            if gti == tag:
+                                group_entries.append(gv)
+                        except ValueError:
+                            pass
+                        i += 1
+                    if group_entries:
+                        msg.set_repeating_group(tag, group_entries)
+                    continue
+
+                # Regular tags — store only first occurrence
+                if tag not in msg.fields:
+                    msg.fields[tag] = value
+                i += 1
+        else:
+            # Standard parse for non-market-data messages
+            for part in parts:
+                if "=" in part:
+                    tag_str, value = part.split("=", 1)
+                    try:
+                        msg.fields[int(tag_str)] = value
+                    except ValueError:
+                        pass
+
         return msg
 
     @staticmethod
@@ -850,13 +931,23 @@ class FIXConnection:
 
     def _handle_market_data(self, msg: FIXMessage):
         """Handle market data snapshot/refresh (35=W or 35=X)."""
-        # cTrader sends bid/ask in MDEntryPx (270) with MDEntryType (269)
-        # For snapshot (W): may contain multiple entries
-        # We extract bid (269=0) and ask (269=1) prices
+        raw_symbol = msg.get(55, "")
+
+        # Parse bid/ask from repeating group entries
+        bid = ""
+        ask = ""
+        entries = msg.get_all(270)  # All MDEntryPx values
+        types = msg.get_all(269)   # All MDEntryType values
+        for md_type, px in zip(types, entries):
+            if str(md_type) == "0":
+                bid = px
+            elif str(md_type) == "1":
+                ask = px
+
         data = {
-            "symbol": msg.get(55),
-            "bid": msg.get(270, ""),  # MDEntryPx (first entry)
-            "ask": "",
+            "symbol": raw_symbol,  # Keep as numeric ID; reverse-map in CTraderFIXConnector._on_market_data
+            "bid": bid,
+            "ask": ask,
             "timestamp": msg.get(52),
         }
         if self.on_market_data:
@@ -970,11 +1061,16 @@ class CTraderFIXConnector:
 
     def _on_market_data(self, data: Dict):
         """Callback for market data updates."""
-        symbol = data.get("symbol", "")
-        if symbol:
-            # Try to reverse-map numeric ID back to symbol name for storage
-            symbol_name = self.symbol_map.get_symbol_name(symbol)
-            self._latest_quotes[symbol_name] = data
+        raw_symbol = data.get("symbol", "")
+        if raw_symbol:
+            # Store under numeric ID (e.g., "41", "22395") for get_latest_quote lookups
+            self._latest_quotes[raw_symbol] = data
+            # Also store under symbol name if reverse-map succeeds
+            try:
+                symbol_name = self.symbol_map.get_symbol_name(raw_symbol)
+                self._latest_quotes[symbol_name] = data
+            except Exception:
+                pass
 
     def _on_execution(self, report: Dict):
         """Callback for execution reports."""
