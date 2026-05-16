@@ -1,31 +1,41 @@
 """
-Chastiefol — Real-Time Data Feed
-Fetches live & historical XAUUSD prices from multiple providers with failover.
+Chastiefol — Real-Time Data Feed (XAUUSD)
+Fetches live & historical XAUUSD prices WITHOUT external API keys.
 
-Supported Providers:
-1. TwelveData (primary) — real-time + historical OHLCV
-2. Alpha Vantage (secondary) — historical + intraday
-3. GoldAPI.io (tertiary) — spot price only
+Primary Provider: TradingView WebSocket (FREE, no key required)
+  - Real-time tick data (same as TradingView charts)
+  - Historical OHLCV bars (200 bars loaded on subscribe)
+  - Auto-reconnect with failover
 
-Features:
-- Automatic failover between providers
-- Rate limit management
-- Caching layer to reduce API calls
-- WebSocket support for TwelveData real-time streaming
+Secondary Provider: CCXT/Binance (for PAXG/USDT as gold proxy)
+  - Fallback if TradingView WS is unavailable
+  - Uses same CCXT infrastructure as crypto module
+
+REMOVED (no longer needed):
+  - TwelveData (rate limited, requires paid API key)
+  - AlphaVantage (25 req/day limit, stale data)
+  - GoldAPI (spot price only, NO historical candles)
+
+The scanner REQUIRES historical OHLCV data to compute indicators (EMA, RSI, PSAR, etc).
+TradingView WS provides this out of the box — 200 H1 bars on subscribe.
 """
 
 import logging
 import asyncio
 import time
-from abc import ABC, abstractmethod
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable
 from enum import Enum
 
-import aiohttp
 import pandas as pd
-import numpy as np
+
+from .tradingview_ws import (
+    TradingViewWSProvider,
+    TVWebSocketConfig,
+    TVTick,
+    TVBar,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,29 +60,43 @@ class Timeframe(str, Enum):
     W1 = "1week"
 
 
+# TradingView timeframe mapping
+TV_TIMEFRAME_MAP = {
+    Timeframe.M1: "1",
+    Timeframe.M5: "5",
+    Timeframe.M15: "15",
+    Timeframe.M30: "30",
+    Timeframe.H1: "60",
+    Timeframe.H4: "240",
+    Timeframe.D1: "1D",
+    Timeframe.W1: "1W",
+}
+
+
 @dataclass
 class DataFeedConfig:
-    """Configuration for data feed providers."""
-    # TwelveData
-    twelvedata_api_key: str = ""
-    twelvedata_base_url: str = "https://api.twelvedata.com"
-    twelvedata_ws_url: str = "wss://ws.twelvedata.com/v1"
-
-    # Alpha Vantage
-    alphavantage_api_key: str = ""
-    alphavantage_base_url: str = "https://www.alphavantage.co/query"
-
-    # GoldAPI
-    goldapi_api_key: str = ""
-    goldapi_base_url: str = "https://www.goldapi.io/api"
+    """Configuration for data feed — NO external API keys needed."""
+    # Symbol
+    symbol: str = "OANDA:XAUUSD"
+    symbol_alt: List[str] = field(default_factory=lambda: [
+        "FOREXCOM:XAUUSD", "FX:XAUUSD", "CAPITALCOM:GOLD",
+    ])
 
     # General
-    symbol: str = "XAU/USD"
     default_timeframe: Timeframe = Timeframe.H1
+    bars_to_load: int = 200
     cache_ttl_seconds: int = 30
-    max_retries: int = 3
-    request_timeout: int = 15
-    rate_limit_delay: float = 1.0
+
+    # TradingView WebSocket (primary — FREE)
+    tv_ws_url: str = "wss://data.tradingview.com/socket.io/websocket"
+    tv_reconnect_attempts: int = 5
+    tv_reconnect_delay: float = 3.0
+
+    # CCXT/Binance fallback (for PAXG/USDT gold proxy)
+    binance_api_key: str = ""
+    binance_secret: str = ""
+    use_binance_fallback: bool = True
+    binance_gold_symbol: str = "PAXG/USDT"
 
 
 @dataclass
@@ -88,443 +112,128 @@ class PriceQuote:
 
     @property
     def price(self) -> float:
-        return self.mid if self.mid > 0 else (self.bid + self.ask) / 2
-
-
-@dataclass
-class OHLCVBar:
-    """Single OHLCV candle."""
-    timestamp: str = ""
-    open: float = 0.0
-    high: float = 0.0
-    low: float = 0.0
-    close: float = 0.0
-    volume: float = 0.0
+        return self.mid if self.mid > 0 else (self.bid + self.ask) / 2 if self.bid > 0 else 0.0
 
 
 # ──────────────────────────────────────────────
-# Abstract Provider
-# ──────────────────────────────────────────────
-
-class DataProvider(ABC):
-    """Abstract base class for data providers."""
-
-    def __init__(self, name: str):
-        self.name = name
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._last_request_time = 0.0
-        self._is_available = True
-
-    async def init_session(self):
-        if not self._session:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=15)
-            )
-
-    async def close_session(self):
-        if self._session:
-            await self._session.close()
-            self._session = None
-
-    @abstractmethod
-    async def get_quote(self, symbol: str) -> Optional[PriceQuote]:
-        """Get real-time price quote."""
-        pass
-
-    @abstractmethod
-    async def get_historical(
-        self, symbol: str, timeframe: Timeframe, bars: int
-    ) -> Optional[pd.DataFrame]:
-        """Get historical OHLCV data."""
-        pass
-
-    @property
-    def is_available(self) -> bool:
-        return self._is_available
-
-
-# ──────────────────────────────────────────────
-# TwelveData Provider
-# ──────────────────────────────────────────────
-
-class TwelveDataProvider(DataProvider):
-    """
-    TwelveData API provider.
-    Docs: https://twelvedata.com/docs
-    Free tier: 8 requests/min, 800/day
-    """
-
-    def __init__(self, config: DataFeedConfig):
-        super().__init__("TwelveData")
-        self.config = config
-        self._api_key = config.twelvedata_api_key
-        self._base_url = config.twelvedata_base_url
-        self._ws_connection = None
-        self._on_tick: Optional[Callable] = None
-
-    async def get_quote(self, symbol: str) -> Optional[PriceQuote]:
-        """Get real-time price from TwelveData."""
-        await self.init_session()
-        url = f"{self._base_url}/price"
-        params = {
-            "symbol": symbol,
-            "apikey": self._api_key,
-        }
-
-        try:
-            async with self._session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if "price" in data:
-                        price = float(data["price"])
-                        return PriceQuote(
-                            symbol=symbol.replace("/", ""),
-                            bid=price - 0.15,  # Approximate spread
-                            ask=price + 0.15,
-                            mid=price,
-                            spread=0.30,
-                            timestamp=datetime.now(timezone.utc).isoformat(),
-                            provider=self.name,
-                        )
-                    elif "message" in data:
-                        log.warning(f"[TwelveData] {data['message']}")
-                elif resp.status == 429:
-                    log.warning("[TwelveData] Rate limit hit.")
-                    self._is_available = False
-                    await asyncio.sleep(60)
-                    self._is_available = True
-        except Exception as e:
-            log.error(f"[TwelveData] Quote error: {e}")
-        return None
-
-    async def get_historical(
-        self, symbol: str, timeframe: Timeframe, bars: int = 100
-    ) -> Optional[pd.DataFrame]:
-        """Get historical OHLCV data from TwelveData."""
-        await self.init_session()
-        url = f"{self._base_url}/time_series"
-        params = {
-            "symbol": symbol,
-            "interval": timeframe.value,
-            "outputsize": bars,
-            "apikey": self._api_key,
-            "format": "JSON",
-        }
-
-        try:
-            async with self._session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if "values" in data:
-                        return self._parse_ohlcv(data["values"])
-                    elif "message" in data:
-                        log.warning(f"[TwelveData] {data['message']}")
-                elif resp.status == 429:
-                    log.warning("[TwelveData] Rate limit hit on historical.")
-                    self._is_available = False
-        except Exception as e:
-            log.error(f"[TwelveData] Historical error: {e}")
-        return None
-
-    async def start_websocket(self, symbol: str, on_tick: Callable):
-        """Start WebSocket streaming for real-time ticks."""
-        self._on_tick = on_tick
-        ws_url = self.config.twelvedata_ws_url
-
-        try:
-            await self.init_session()
-            async with self._session.ws_connect(ws_url) as ws:
-                self._ws_connection = ws
-                # Subscribe
-                subscribe_msg = {
-                    "action": "subscribe",
-                    "params": {
-                        "symbols": symbol,
-                    },
-                }
-                await ws.send_json(subscribe_msg)
-                log.info(f"[TwelveData] WebSocket subscribed to {symbol}")
-
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        data = msg.json()
-                        if "price" in data:
-                            quote = PriceQuote(
-                                symbol=data.get("symbol", symbol).replace("/", ""),
-                                mid=float(data["price"]),
-                                bid=float(data["price"]) - 0.15,
-                                ask=float(data["price"]) + 0.15,
-                                spread=0.30,
-                                timestamp=data.get("timestamp", ""),
-                                provider=self.name,
-                            )
-                            if self._on_tick:
-                                await self._on_tick(quote)
-                    elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
-                        log.warning("[TwelveData] WebSocket closed.")
-                        break
-        except Exception as e:
-            log.error(f"[TwelveData] WebSocket error: {e}")
-
-    async def stop_websocket(self):
-        """Stop WebSocket connection."""
-        if self._ws_connection:
-            await self._ws_connection.close()
-            self._ws_connection = None
-
-    def _parse_ohlcv(self, values: List[Dict]) -> pd.DataFrame:
-        """Parse TwelveData time series response to DataFrame."""
-        rows = []
-        for v in reversed(values):  # TwelveData returns newest first
-            rows.append({
-                "timestamp": v.get("datetime", ""),
-                "open": float(v.get("open", 0)),
-                "high": float(v.get("high", 0)),
-                "low": float(v.get("low", 0)),
-                "close": float(v.get("close", 0)),
-                "volume": float(v.get("volume", 0)),
-            })
-        df = pd.DataFrame(rows)
-        return df
-
-
-# ──────────────────────────────────────────────
-# Alpha Vantage Provider
-# ──────────────────────────────────────────────
-
-class AlphaVantageProvider(DataProvider):
-    """
-    Alpha Vantage API provider.
-    Docs: https://www.alphavantage.co/documentation/
-    Free tier: 25 requests/day
-    """
-
-    TIMEFRAME_MAP = {
-        Timeframe.M1: ("TIME_SERIES_INTRADAY", "1min"),
-        Timeframe.M5: ("TIME_SERIES_INTRADAY", "5min"),
-        Timeframe.M15: ("TIME_SERIES_INTRADAY", "15min"),
-        Timeframe.M30: ("TIME_SERIES_INTRADAY", "30min"),
-        Timeframe.H1: ("TIME_SERIES_INTRADAY", "60min"),
-        Timeframe.D1: ("TIME_SERIES_DAILY", None),
-        Timeframe.W1: ("TIME_SERIES_WEEKLY", None),
-    }
-
-    def __init__(self, config: DataFeedConfig):
-        super().__init__("AlphaVantage")
-        self.config = config
-        self._api_key = config.alphavantage_api_key
-        self._base_url = config.alphavantage_base_url
-
-    async def get_quote(self, symbol: str) -> Optional[PriceQuote]:
-        """Get real-time quote from Alpha Vantage."""
-        await self.init_session()
-        # Alpha Vantage uses CURRENCY_EXCHANGE_RATE for forex
-        params = {
-            "function": "CURRENCY_EXCHANGE_RATE",
-            "from_currency": "XAU",
-            "to_currency": "USD",
-            "apikey": self._api_key,
-        }
-
-        try:
-            async with self._session.get(self._base_url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    rate_data = data.get("Realtime Currency Exchange Rate", {})
-                    if rate_data:
-                        price = float(rate_data.get("5. Exchange Rate", 0))
-                        bid = float(rate_data.get("8. Bid Price", price - 0.2))
-                        ask = float(rate_data.get("9. Ask Price", price + 0.2))
-                        return PriceQuote(
-                            symbol="XAUUSD",
-                            bid=bid,
-                            ask=ask,
-                            mid=price,
-                            spread=ask - bid,
-                            timestamp=rate_data.get("6. Last Refreshed", ""),
-                            provider=self.name,
-                        )
-                    elif "Note" in data:
-                        log.warning(f"[AlphaVantage] Rate limit: {data['Note']}")
-                        self._is_available = False
-        except Exception as e:
-            log.error(f"[AlphaVantage] Quote error: {e}")
-        return None
-
-    async def get_historical(
-        self, symbol: str, timeframe: Timeframe, bars: int = 100
-    ) -> Optional[pd.DataFrame]:
-        """Get historical data from Alpha Vantage."""
-        await self.init_session()
-
-        func_info = self.TIMEFRAME_MAP.get(timeframe)
-        if not func_info:
-            log.warning(f"[AlphaVantage] Timeframe {timeframe} not supported, using daily.")
-            func_info = ("TIME_SERIES_DAILY", None)
-
-        function, interval = func_info
-        params = {
-            "function": function,
-            "symbol": "XAUUSD",
-            "apikey": self._api_key,
-            "outputsize": "compact" if bars <= 100 else "full",
-        }
-        if interval:
-            params["interval"] = interval
-
-        try:
-            async with self._session.get(self._base_url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    # Find the time series key
-                    ts_key = None
-                    for key in data:
-                        if "Time Series" in key:
-                            ts_key = key
-                            break
-                    if ts_key:
-                        return self._parse_time_series(data[ts_key], bars)
-                    elif "Note" in data:
-                        log.warning(f"[AlphaVantage] {data['Note']}")
-                        self._is_available = False
-        except Exception as e:
-            log.error(f"[AlphaVantage] Historical error: {e}")
-        return None
-
-    def _parse_time_series(self, ts_data: Dict, bars: int) -> pd.DataFrame:
-        """Parse Alpha Vantage time series to DataFrame."""
-        rows = []
-        for ts, values in sorted(ts_data.items()):
-            rows.append({
-                "timestamp": ts,
-                "open": float(values.get("1. open", 0)),
-                "high": float(values.get("2. high", 0)),
-                "low": float(values.get("3. low", 0)),
-                "close": float(values.get("4. close", 0)),
-                "volume": float(values.get("5. volume", 0)),
-            })
-
-        df = pd.DataFrame(rows[-bars:])
-        return df
-
-
-# ──────────────────────────────────────────────
-# GoldAPI Provider
-# ──────────────────────────────────────────────
-
-class GoldAPIProvider(DataProvider):
-    """
-    GoldAPI.io provider — spot price only (no historical OHLCV).
-    Docs: https://www.goldapi.io/dashboard
-    """
-
-    def __init__(self, config: DataFeedConfig):
-        super().__init__("GoldAPI")
-        self.config = config
-        self._api_key = config.goldapi_api_key
-        self._base_url = config.goldapi_base_url
-
-    async def get_quote(self, symbol: str) -> Optional[PriceQuote]:
-        """Get spot gold price from GoldAPI."""
-        await self.init_session()
-        url = f"{self._base_url}/XAU/USD"
-        headers = {
-            "x-access-token": self._api_key,
-            "Content-Type": "application/json",
-        }
-
-        try:
-            async with self._session.get(url, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    price = float(data.get("price", 0))
-                    if price > 0:
-                        return PriceQuote(
-                            symbol="XAUUSD",
-                            bid=price - float(data.get("spread", 0.3)) / 2,
-                            ask=price + float(data.get("spread", 0.3)) / 2,
-                            mid=price,
-                            spread=float(data.get("spread", 0.3)),
-                            timestamp=data.get("timestamp", ""),
-                            provider=self.name,
-                        )
-                elif resp.status == 403:
-                    log.error("[GoldAPI] Invalid API key.")
-                    self._is_available = False
-                elif resp.status == 429:
-                    log.warning("[GoldAPI] Rate limit exceeded.")
-                    self._is_available = False
-        except Exception as e:
-            log.error(f"[GoldAPI] Quote error: {e}")
-        return None
-
-    async def get_historical(
-        self, symbol: str, timeframe: Timeframe, bars: int = 100
-    ) -> Optional[pd.DataFrame]:
-        """GoldAPI does not support historical data — returns None."""
-        log.info("[GoldAPI] Historical data not supported by this provider.")
-        return None
-
-
-# ──────────────────────────────────────────────
-# Data Feed Manager (Orchestrator with Failover)
+# Data Feed Manager (TradingView WS + CCXT Fallback)
 # ──────────────────────────────────────────────
 
 class DataFeedManager:
     """
-    Manages multiple data providers with automatic failover.
-    
-    Priority order:
-    1. TwelveData (primary — best for real-time + historical)
-    2. Alpha Vantage (secondary — good historical)
-    3. GoldAPI (tertiary — spot price only)
-    
+    XAUUSD data feed using TradingView WebSocket (FREE, no API key).
+
+    Provides:
+    - Real-time price quotes (tick streaming)
+    - Historical OHLCV bars (200 bars loaded on subscribe)
+    - Auto-reconnect + failover to CCXT/Binance
+
+    The TradingView WebSocket loads historical bars immediately on subscribe,
+    solving the "no historical candles" problem that broke the scanner.
+
     Usage:
-        config = DataFeedConfig(twelvedata_api_key="...", alphavantage_api_key="...")
+        config = DataFeedConfig()  # No API keys needed!
         feed = DataFeedManager(config)
         await feed.initialize()
-        
-        quote = await feed.get_quote()
+
+        # Get historical bars for analysis
         df = await feed.get_ohlcv(timeframe=Timeframe.H1, bars=200)
-        
+
+        # Get current price
+        quote = await feed.get_quote()
+
         await feed.shutdown()
     """
 
-    def __init__(self, config: DataFeedConfig):
-        self.config = config
-        self.providers: List[DataProvider] = []
-        self._cache: Dict[str, Dict] = {}
-        self._cache_timestamps: Dict[str, float] = {}
+    def __init__(self, config: DataFeedConfig = None):
+        self.config = config or DataFeedConfig()
+
+        # TradingView WebSocket provider (primary)
+        self._tv_provider: Optional[TradingViewWSProvider] = None
+        self._tv_connected = False
+
+        # CCXT fallback (secondary)
+        self._ccxt_provider = None
+
+        # Cache
+        self._quote_cache: Optional[PriceQuote] = None
+        self._quote_cache_time: float = 0.0
+        self._ohlcv_cache: Dict[str, pd.DataFrame] = {}
+        self._ohlcv_cache_times: Dict[str, float] = {}
+
+        # State
         self._initialized = False
-
-        # Initialize providers based on available keys
-        if config.twelvedata_api_key:
-            self.providers.append(TwelveDataProvider(config))
-        if config.alphavantage_api_key:
-            self.providers.append(AlphaVantageProvider(config))
-        if config.goldapi_api_key:
-            self.providers.append(GoldAPIProvider(config))
-
-        if not self.providers:
-            log.warning("No API keys configured! Add at least one provider key.")
+        self._on_tick_callbacks: List[Callable] = []
 
         log.info(f"DataFeedManager initialized | "
-                 f"Providers: {[p.name for p in self.providers]} | "
-                 f"Symbol: {config.symbol}")
+                 f"Symbol: {self.config.symbol} | "
+                 f"Provider: TradingView WS (FREE) | "
+                 f"Bars: {self.config.bars_to_load}")
+
+    # ──────────────────────────────────────────
+    # Lifecycle
+    # ──────────────────────────────────────────
 
     async def initialize(self):
-        """Initialize all provider sessions."""
-        for provider in self.providers:
-            await provider.init_session()
+        """Initialize data feed — connect to TradingView WebSocket."""
+        log.info("Initializing data feed (TradingView WebSocket)...")
+
+        # 1. Start TradingView WebSocket
+        tv_config = TVWebSocketConfig(
+            ws_url=self.config.tv_ws_url,
+            symbol=self.config.symbol,
+            alt_symbols=self.config.symbol_alt,
+            timeframe=TV_TIMEFRAME_MAP.get(self.config.default_timeframe, "60"),
+            bars_to_load=self.config.bars_to_load,
+            reconnect_attempts=self.config.tv_reconnect_attempts,
+            reconnect_delay=self.config.tv_reconnect_delay,
+        )
+        self._tv_provider = TradingViewWSProvider(tv_config)
+        self._tv_provider.on_tick = self._on_tv_tick
+
+        connected = await self._tv_provider.connect()
+        if connected:
+            await self._tv_provider.subscribe()
+            self._tv_connected = True
+            log.info("  ✓ TradingView WebSocket connected (FREE, no API key)")
+
+            # Wait for bars to load
+            await asyncio.sleep(3)
+            bars = self._tv_provider.get_bars()
+            if bars:
+                log.info(f"  ✓ Loaded {len(bars)} historical bars from TradingView")
+            else:
+                log.warning("  ⚠ No historical bars yet (may still be loading)")
+        else:
+            log.warning("  ✗ TradingView WebSocket failed — will use CCXT fallback")
+
+        # 2. Initialize CCXT fallback if configured
+        if self.config.use_binance_fallback:
+            try:
+                from CryptoDataFeed.providers import CCXTProvider, CryptoTimeframe
+                self._ccxt_provider = CCXTProvider(
+                    exchange_id="binance",
+                    api_key=self.config.binance_api_key,
+                    secret=self.config.binance_secret,
+                )
+                await self._ccxt_provider.initialize()
+                if self._ccxt_provider.is_available:
+                    log.info("  ✓ CCXT/Binance fallback ready (PAXG/USDT)")
+            except Exception as e:
+                log.info(f"  ⚠ CCXT fallback not available: {e}")
+                self._ccxt_provider = None
+
         self._initialized = True
-        log.info("All data feed sessions initialized.")
+        log.info("Data feed ready.")
 
     async def shutdown(self):
-        """Close all provider sessions."""
-        for provider in self.providers:
-            await provider.close_session()
+        """Disconnect all providers."""
+        if self._tv_provider:
+            await self._tv_provider.disconnect()
+        if self._ccxt_provider:
+            await self._ccxt_provider.close()
         self._initialized = False
-        log.info("All data feed sessions closed.")
+        log.info("Data feed shut down.")
 
     # ──────────────────────────────────────────
     # Public API
@@ -532,180 +241,181 @@ class DataFeedManager:
 
     async def get_quote(self, symbol: str = None) -> Optional[PriceQuote]:
         """
-        Get real-time price quote with automatic failover.
-        Tries each provider in priority order until one succeeds.
+        Get real-time XAUUSD price quote.
+        Source: TradingView WebSocket tick data (live, no API key).
         """
-        symbol = symbol or self.config.symbol
-
         # Check cache
-        cache_key = f"quote_{symbol}"
-        cached = self._get_cached(cache_key)
-        if cached:
-            return cached
+        if self._quote_cache and (time.time() - self._quote_cache_time) < 5:
+            return self._quote_cache
 
-        # Try providers in order
-        for provider in self.providers:
-            if not provider.is_available:
-                continue
-            quote = await provider.get_quote(symbol)
-            if quote:
-                self._set_cache(cache_key, quote)
+        # TradingView WS (primary)
+        if self._tv_provider and self._tv_connected:
+            tick = self._tv_provider.get_latest_tick()
+            if tick and tick.price > 0:
+                quote = PriceQuote(
+                    symbol="XAUUSD",
+                    bid=tick.bid if tick.bid > 0 else tick.price - 0.15,
+                    ask=tick.ask if tick.ask > 0 else tick.price + 0.15,
+                    mid=tick.price,
+                    spread=tick.ask - tick.bid if tick.bid > 0 else 0.30,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    provider="TradingView:WS",
+                )
+                self._quote_cache = quote
+                self._quote_cache_time = time.time()
                 return quote
-            log.warning(f"[{provider.name}] Failed, trying next provider...")
 
-        log.error("All providers failed to get quote.")
-        return None
+        # CCXT fallback (PAXG/USDT as gold proxy)
+        if self._ccxt_provider and self._ccxt_provider.is_available:
+            try:
+                ccxt_quote = await self._ccxt_provider.get_quote(self.config.binance_gold_symbol)
+                if ccxt_quote and ccxt_quote.price > 0:
+                    quote = PriceQuote(
+                        symbol="XAUUSD",
+                        bid=ccxt_quote.bid,
+                        ask=ccxt_quote.ask,
+                        mid=ccxt_quote.price,
+                        spread=ccxt_quote.spread,
+                        timestamp=ccxt_quote.timestamp,
+                        provider="CCXT:Binance(PAXG)",
+                    )
+                    self._quote_cache = quote
+                    self._quote_cache_time = time.time()
+                    return quote
+            except Exception:
+                pass
+
+        return self._quote_cache  # Return stale cache if available
 
     async def get_ohlcv(
         self,
         timeframe: Timeframe = None,
-        bars: int = 100,
+        bars: int = 200,
         symbol: str = None,
     ) -> Optional[pd.DataFrame]:
         """
-        Get historical OHLCV data with automatic failover.
+        Get historical OHLCV data for XAUUSD.
+
+        Primary: TradingView WebSocket (loads bars on subscribe — FREE).
+        Fallback: CCXT/Binance PAXG/USDT.
+
         Returns DataFrame with columns: timestamp, open, high, low, close, volume
         """
-        symbol = symbol or self.config.symbol
         timeframe = timeframe or self.config.default_timeframe
 
         # Check cache
-        cache_key = f"ohlcv_{symbol}_{timeframe.value}_{bars}"
-        cached = self._get_cached(cache_key)
-        if cached is not None:
-            return cached
+        cache_key = f"ohlcv_{timeframe.value}_{bars}"
+        cached_df = self._get_ohlcv_cache(cache_key)
+        if cached_df is not None:
+            return cached_df
 
-        # Try providers in order
-        for provider in self.providers:
-            if not provider.is_available:
-                continue
-            df = await provider.get_historical(symbol, timeframe, bars)
-            if df is not None and not df.empty:
-                self._set_cache(cache_key, df)
-                log.info(f"[{provider.name}] Got {len(df)} bars "
-                         f"({timeframe.value}) for {symbol}")
-                return df
-            log.warning(f"[{provider.name}] No historical data, trying next...")
+        # TradingView WS (primary) — already has bars loaded
+        if self._tv_provider and self._tv_connected:
+            tv_bars = self._tv_provider.get_bars()
+            if tv_bars and len(tv_bars) >= 50:
+                df = self._tv_provider.get_bars_as_dataframe()
+                if df is not None and not df.empty:
+                    # Ensure numeric columns
+                    for col in ["open", "high", "low", "close", "volume"]:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors="coerce")
+                    df = df.tail(bars)
+                    self._set_ohlcv_cache(cache_key, df)
+                    return df
 
-        log.error("All providers failed to get historical data.")
+        # CCXT fallback (PAXG/USDT)
+        if self._ccxt_provider and self._ccxt_provider.is_available:
+            try:
+                from CryptoDataFeed.providers import CryptoTimeframe
+                tf_map = {
+                    Timeframe.M1: CryptoTimeframe.M1,
+                    Timeframe.M5: CryptoTimeframe.M5,
+                    Timeframe.M15: CryptoTimeframe.M15,
+                    Timeframe.M30: CryptoTimeframe.M30,
+                    Timeframe.H1: CryptoTimeframe.H1,
+                    Timeframe.H4: CryptoTimeframe.H4,
+                    Timeframe.D1: CryptoTimeframe.D1,
+                    Timeframe.W1: CryptoTimeframe.W1,
+                }
+                ccxt_tf = tf_map.get(timeframe)
+                if ccxt_tf:
+                    df = await self._ccxt_provider.get_historical(
+                        self.config.binance_gold_symbol, ccxt_tf, bars
+                    )
+                    if df is not None and not df.empty:
+                        self._set_ohlcv_cache(cache_key, df)
+                        log.info(f"[CCXT] Got {len(df)} bars for PAXG/USDT (gold proxy)")
+                        return df
+            except Exception as e:
+                log.warning(f"CCXT OHLCV fallback failed: {e}")
+
+        log.warning("No OHLCV data available from any provider")
         return None
 
     async def get_latest_price(self, symbol: str = None) -> float:
-        """Convenience method — returns just the mid price as float."""
+        """Convenience — returns just the price as float."""
         quote = await self.get_quote(symbol)
         return quote.price if quote else 0.0
 
-    async def start_streaming(self, on_tick: Callable, symbol: str = None):
-        """
-        Start real-time price streaming via WebSocket (TwelveData only).
-        Falls back to polling if WebSocket unavailable.
-        """
-        symbol = symbol or self.config.symbol
-
-        # Try WebSocket first (TwelveData)
-        for provider in self.providers:
-            if isinstance(provider, TwelveDataProvider):
-                log.info("Starting real-time WebSocket stream...")
-                await provider.start_websocket(symbol, on_tick)
-                return
-
-        # Fallback: polling loop
-        log.info("No WebSocket provider — falling back to polling mode.")
-        while True:
-            quote = await self.get_quote(symbol)
-            if quote and on_tick:
-                if asyncio.iscoroutinefunction(on_tick):
-                    await on_tick(quote)
-                else:
-                    on_tick(quote)
-            await asyncio.sleep(self.config.cache_ttl_seconds)
-
-    async def stop_streaming(self):
-        """Stop any active streaming."""
-        for provider in self.providers:
-            if isinstance(provider, TwelveDataProvider):
-                await provider.stop_websocket()
+    def register_tick_callback(self, callback: Callable):
+        """Register a callback for real-time tick updates."""
+        self._on_tick_callbacks.append(callback)
 
     # ──────────────────────────────────────────
-    # Cache Layer
+    # Internal
     # ──────────────────────────────────────────
 
-    def _get_cached(self, key: str):
-        """Get cached value if not expired."""
-        if key in self._cache:
-            ts = self._cache_timestamps.get(key, 0)
+    def _on_tv_tick(self, tick: TVTick):
+        """Handle incoming TradingView tick."""
+        # Update quote cache
+        self._quote_cache = PriceQuote(
+            symbol="XAUUSD",
+            bid=tick.bid if tick.bid > 0 else tick.price - 0.15,
+            ask=tick.ask if tick.ask > 0 else tick.price + 0.15,
+            mid=tick.price,
+            spread=tick.ask - tick.bid if tick.bid > 0 else 0.30,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            provider="TradingView:WS",
+        )
+        self._quote_cache_time = time.time()
+
+        # Fire callbacks
+        for cb in self._on_tick_callbacks:
+            try:
+                cb(tick)
+            except Exception:
+                pass
+
+    def _get_ohlcv_cache(self, key: str) -> Optional[pd.DataFrame]:
+        """Get cached OHLCV if not expired."""
+        if key in self._ohlcv_cache:
+            ts = self._ohlcv_cache_times.get(key, 0)
             if time.time() - ts < self.config.cache_ttl_seconds:
-                return self._cache[key]
-            else:
-                del self._cache[key]
-                del self._cache_timestamps[key]
+                return self._ohlcv_cache[key]
         return None
 
-    def _set_cache(self, key: str, value):
-        """Store value in cache."""
-        self._cache[key] = value
-        self._cache_timestamps[key] = time.time()
-
-    def clear_cache(self):
-        """Clear all cached data."""
-        self._cache.clear()
-        self._cache_timestamps.clear()
+    def _set_ohlcv_cache(self, key: str, df: pd.DataFrame):
+        """Cache OHLCV data."""
+        self._ohlcv_cache[key] = df
+        self._ohlcv_cache_times[key] = time.time()
 
     # ──────────────────────────────────────────
-    # Provider Health
+    # Status
     # ──────────────────────────────────────────
 
     def get_status(self) -> Dict:
-        """Get status of all providers."""
+        """Get data feed status."""
+        tv_status = self._tv_provider.get_status() if self._tv_provider else {}
         return {
-            "providers": [
-                {
-                    "name": p.name,
-                    "available": p.is_available,
-                }
-                for p in self.providers
-            ],
-            "cache_size": len(self._cache),
             "initialized": self._initialized,
+            "tradingview_ws": {
+                "connected": self._tv_connected,
+                "bars_cached": tv_status.get("bars_cached", 0),
+                "latest_price": tv_status.get("latest_price", 0),
+            },
+            "ccxt_fallback": {
+                "available": self._ccxt_provider.is_available if self._ccxt_provider else False,
+            },
+            "cache_size": len(self._ohlcv_cache),
+            "provider": "TradingView WS (FREE)" if self._tv_connected else "CCXT/Binance",
         }
-
-
-# ──────────────────────────────────────────────
-# Standalone Test
-# ──────────────────────────────────────────────
-
-async def main():
-    """Test data feed standalone."""
-    import os
-
-    config = DataFeedConfig(
-        twelvedata_api_key=os.environ.get("TWELVEDATA_API_KEY", ""),
-        alphavantage_api_key=os.environ.get("ALPHAVANTAGE_API_KEY", ""),
-        goldapi_api_key=os.environ.get("GOLDAPI_API_KEY", ""),
-        symbol="XAU/USD",
-        default_timeframe=Timeframe.H1,
-    )
-
-    feed = DataFeedManager(config)
-    await feed.initialize()
-
-    # Get quote
-    quote = await feed.get_quote()
-    if quote:
-        log.info(f"Current price: ${quote.price:.2f} (spread: {quote.spread:.2f}) "
-                 f"via {quote.provider}")
-
-    # Get historical
-    df = await feed.get_ohlcv(timeframe=Timeframe.H1, bars=50)
-    if df is not None:
-        log.info(f"Historical data: {len(df)} bars")
-        log.info(f"Latest close: ${df['close'].iloc[-1]:.2f}")
-
-    # Status
-    log.info(f"Provider status: {feed.get_status()}")
-
-    await feed.shutdown()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

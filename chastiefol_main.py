@@ -112,10 +112,9 @@ class IntegratedConfig:
     fix_target_comp_id: str = "cServer"
     fix_password: str = ""
 
-    # Data Feed
-    twelvedata_api_key: str = ""
-    alphavantage_api_key: str = ""
-    goldapi_api_key: str = ""
+    # Data Feed (TradingView WS — no API key needed)
+    # TwelveData, AlphaVantage, GoldAPI REMOVED — they had no historical candles
+    # TradingView WebSocket provides FREE real-time + historical OHLCV
 
     # Telegram
     telegram_bot_token: str = ""
@@ -153,9 +152,6 @@ class IntegratedConfig:
             fix_sender_comp_id=os.getenv("FIX_SENDER_COMP_ID", "demo.ctrader.5820056"),
             fix_target_comp_id=os.getenv("FIX_TARGET_COMP_ID", "cServer"),
             fix_password=os.getenv("FIX_PASSWORD", ""),
-            twelvedata_api_key=os.getenv("TWELVEDATA_API_KEY", ""),
-            alphavantage_api_key=os.getenv("ALPHAVANTAGE_API_KEY", ""),
-            goldapi_api_key=os.getenv("GOLDAPI_API_KEY", ""),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
             execution_method=os.getenv("EXECUTION_METHOD", "mcp"),
@@ -260,33 +256,13 @@ class ChastiefollIntegrated:
         else:
             log.warning("⚠ Telegram not configured — notifications disabled")
 
-        # 2. Initialize Data Feed
-        if any([self.config.twelvedata_api_key,
-                self.config.alphavantage_api_key,
-                self.config.goldapi_api_key]):
-            # Map internal symbol to data feed provider format
-            # XAUUSD → "XAU/USD", BTCUSD → "BTC/USD"
-            feed_symbol = self.config.symbol
-            if feed_symbol == "XAUUSD":
-                feed_symbol = "XAU/USD"
-            elif feed_symbol == "BTCUSD":
-                feed_symbol = "BTC/USD"
-
-            feed_config = DataFeedConfig(
-                twelvedata_api_key=self.config.twelvedata_api_key,
-                alphavantage_api_key=self.config.alphavantage_api_key,
-                goldapi_api_key=self.config.goldapi_api_key,
-                symbol=feed_symbol,
-                default_timeframe=Timeframe(self.config.timeframe.lower()
-                    .replace("h1", "1h").replace("h4", "4h")
-                    .replace("m1", "1min").replace("m5", "5min")
-                    .replace("m15", "15min").replace("d1", "1day")),
-            )
-            self.data_feed = DataFeedManager(feed_config)
-            await self.data_feed.initialize()
-            log.info("✓ Data feed initialized")
-        else:
-            log.warning("⚠ No data feed API keys — using synthetic data")
+        # 2. Initialize Data Feed (TradingView WS — FREE, no API key)
+        feed_config = DataFeedConfig(
+            symbol="OANDA:XAUUSD" if self.config.symbol == "XAUUSD" else f"BINANCE:{self.config.symbol}",
+        )
+        self.data_feed = DataFeedManager(feed_config)
+        await self.data_feed.initialize()
+        log.info("✓ Data feed initialized (TradingView WS — no API key needed)")
 
         # 3. Initialize cTrader Connector + Sync Account Balance
         if not self.config.paper_mode:
