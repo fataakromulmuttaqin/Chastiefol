@@ -199,7 +199,8 @@ class TelegramCommandHandler:
             "🛡️ `/risk` — Risk metrics & drawdown\n"
             "🏓 `/ping` — Check agent is alive\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "_Chastiefol XAUUSD Trading Agent_"
+            "_Chastiefol Multi-Pair Agent_\n"
+            "_XAUUSD | BTCUSD_"
         )
 
     async def _cmd_status(self) -> str:
@@ -217,7 +218,7 @@ class TelegramCommandHandler:
         running = data.get("running", False)
         mode = data.get("mode", "unknown")
         paper = data.get("paper_mode", True)
-        symbol = data.get("symbol", "XAUUSD")
+        symbols = data.get("symbols", data.get("symbol", "XAUUSD, BTCUSD"))
         components = data.get("components", {})
 
         status_emoji = "🟢" if running else "🔴"
@@ -247,7 +248,7 @@ class TelegramCommandHandler:
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Status: *{'ONLINE' if running else 'OFFLINE'}*\n"
             f"{mode_emoji} Mode: `{mode.upper()}`\n"
-            f"Symbol: `{symbol}`\n"
+            f"Pairs: `{symbols}`\n"
             f"Paper: `{'Yes' if paper else 'No — LIVE'}`\n"
             f"Uptime: `{uptime_str}`\n\n"
             f"*Components:*\n"
@@ -389,8 +390,8 @@ class TelegramCommandHandler:
         msg = "🔔 *RECENT SIGNALS*\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
         for sig in data[:6]:
-            action = sig.get("action", "?")
-            symbol = sig.get("symbol", "XAUUSD")
+            action = sig.get("action", sig.get("signal", "?"))
+            symbol = sig.get("symbol", "—")
             confidence = sig.get("confidence", 0)
             confluence = sig.get("confluence", 0)
             timestamp = sig.get("timestamp", sig.get("created_at", ""))

@@ -303,8 +303,9 @@ class TelegramNotifier:
         equity: float = 0.0,
         max_drawdown: float = 0.0,
         win_rate: float = 0.0,
+        per_pair: Dict[str, Dict] = None,
     ):
-        """Send daily P&L summary."""
+        """Send daily P&L summary with per-pair breakdown."""
         if not date:
             date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -323,9 +324,25 @@ class TelegramNotifier:
             f"  Balance: `${balance:,.2f}`\n"
             f"  Equity: `${equity:,.2f}`\n"
             f"  Max Drawdown: `{max_drawdown:.2f}%`\n"
-            f"\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"_Chastiefol Trading Agent_"
+        )
+
+        # Per-pair breakdown
+        if per_pair:
+            msg += f"\n📈 *Per Pair:*\n"
+            for pair, stats in per_pair.items():
+                pair_pnl = stats.get("pnl", 0)
+                pair_trades = stats.get("trades", 0)
+                pair_wins = stats.get("wins", 0)
+                pair_losses = stats.get("losses", 0)
+                pair_emoji = "🟢" if pair_pnl >= 0 else "🔴"
+                msg += (
+                    f"  {pair_emoji} {pair}: *${pair_pnl:+.2f}* "
+                    f"({pair_wins}W/{pair_losses}L)\n"
+                )
+
+        msg += (
+            f"\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"_Chastiefol v3.0 | XAUUSD + BTCUSD_"
         )
         await self._enqueue(msg, NotificationType.DAILY_SUMMARY)
 
@@ -337,8 +354,9 @@ class TelegramNotifier:
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Status: *{status}*\n"
             f"Time: `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}`\n"
-            f"Mode: `XAUUSD Automated Trading`\n"
-            f"\n_Chastiefol v1.0_"
+            f"Mode: `Multi-Pair Automated Trading`\n"
+            f"Pairs: `XAUUSD` | `BTCUSD`\n"
+            f"\n_Chastiefol v3.0_"
         )
         await self._enqueue(msg, NotificationType.SYSTEM_STATUS)
 

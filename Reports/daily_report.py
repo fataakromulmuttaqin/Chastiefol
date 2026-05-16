@@ -403,7 +403,7 @@ class DailyReportGenerator:
 
         msg += (
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"_Chastiefol Agent | Auto-generated_"
+            f"_Chastiefol Agent v3.0 | XAUUSD + BTCUSD | Auto-generated_"
         )
 
         return msg
@@ -445,7 +445,7 @@ class DailyReportGenerator:
 
         msg += (
             f"\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"_Chastiefol Agent | Weekly Summary_"
+            f"_Chastiefol Agent v3.0 | XAUUSD + BTCUSD | Weekly Summary_"
         )
         return msg
 
@@ -544,8 +544,8 @@ if __name__ == "__main__":
         {"symbol": "XAUUSD", "direction": "BUY", "pnl_usd": 85.0, "outcome": "WIN"},
         {"symbol": "XAUUSD", "direction": "SELL", "pnl_usd": -32.0, "outcome": "LOSS"},
         {"symbol": "XAUUSD", "direction": "BUY", "pnl_usd": 120.5, "outcome": "WIN"},
-        {"symbol": "XAGUSD", "direction": "BUY", "pnl_usd": -15.0, "outcome": "LOSS"},
-        {"symbol": "EURUSD", "direction": "SELL", "pnl_usd": 28.0, "outcome": "WIN"},
+        {"symbol": "BTCUSD", "direction": "BUY", "pnl_usd": 45.0, "outcome": "WIN"},
+        {"symbol": "BTCUSD", "direction": "SELL", "pnl_usd": -28.0, "outcome": "LOSS"},
     ]
 
     config = ReportConfig()
