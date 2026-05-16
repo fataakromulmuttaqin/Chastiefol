@@ -72,6 +72,9 @@ from Analysis.crypto_pair_config import (
 from Risk.crypto_risk_manager import (
     CryptoRiskManager, CryptoRiskConfig, CryptoPositionSize,
 )
+from LLM.lessons import LessonsManager, TradeRecord
+from LLM.trading_memory import TradingMemory
+from LLM.prompts import CryptoPromptBuilder
 
 logging.basicConfig(
     level=logging.INFO,
@@ -182,6 +185,13 @@ class ChastiefollCrypto:
         self.scanner: Optional[CryptoScanner] = None
         self.telegram = None
 
+        # Learning & Memory System
+        self.lessons = LessonsManager()
+        self.trading_memory = TradingMemory(self.lessons)
+        self.prompt_builder = CryptoPromptBuilder(self.lessons, self.trading_memory)
+        self._trades_since_reflection = 0
+        self._reflection_interval = 5  # Reflect every N closed trades
+
         # State
         self._scan_task: Optional[asyncio.Task] = None
         self._ws_task: Optional[asyncio.Task] = None
@@ -200,6 +210,7 @@ class ChastiefollCrypto:
         log.info(f"  Max Trades: {self.config.max_open_trades}")
         log.info(f"  Exchange:   Binance {'(Sandbox)' if self.config.binance_sandbox else '(Live)'}")
         log.info(f"  WebSocket:  {'Enabled' if self.config.enable_websocket else 'Disabled'}")
+        log.info(f"  Learning:   ENABLED ({self.lessons.get_stats()['total_lessons']} lessons loaded)")
         log.info(f"{'='*60}")
 
     # ──────────────────────────────────────────
@@ -526,6 +537,15 @@ class ChastiefollCrypto:
                     exit_price = close_result.average_price or current_price
                     pnl = self.risk_manager.close_trade(symbol, exit_price)
                     await self._notify_close(symbol, pnl, mgmt["reason"])
+                    
+                    # ── Record trade & auto-learn ──
+                    await self._record_and_learn(
+                        symbol=symbol,
+                        trade=trade,
+                        exit_price=exit_price,
+                        pnl=pnl,
+                        close_reason=mgmt["reason"],
+                    )
 
             elif mgmt["action"] == "manage":
                 for rec in mgmt.get("recommendations", []):
@@ -612,6 +632,99 @@ class ChastiefollCrypto:
             pass
 
     # ──────────────────────────────────────────
+    # Learning & Memory (Auto-lesson generation)
+    # ──────────────────────────────────────────
+
+    async def _record_and_learn(
+        self,
+        symbol: str,
+        trade,
+        exit_price: float,
+        pnl: float,
+        close_reason: str,
+    ):
+        """
+        Record a closed trade and auto-generate lessons from the outcome.
+        This is the core learning loop — every trade teaches something.
+        """
+        try:
+            # Calculate trade metrics
+            entry_price = trade.entry_price
+            duration_min = 0
+            if hasattr(trade, 'open_time') and trade.open_time:
+                from datetime import datetime as dt
+                try:
+                    open_time = dt.fromisoformat(trade.open_time.replace("Z", "+00:00"))
+                    duration_min = int((datetime.now(timezone.utc) - open_time).total_seconds() / 60)
+                except (ValueError, TypeError):
+                    pass
+
+            pnl_pct = (pnl / (self.config.initial_balance)) * 100 if self.config.initial_balance > 0 else 0
+
+            # Determine close reason category
+            reason_category = "manual"
+            reason_lower = close_reason.lower() if close_reason else ""
+            if "stop loss" in reason_lower or "sl" in reason_lower:
+                reason_category = "sl_hit"
+            elif "take profit" in reason_lower or "tp" in reason_lower:
+                reason_category = "tp_hit"
+            elif "trailing" in reason_lower:
+                reason_category = "trailing_stop"
+            elif "breakeven" in reason_lower:
+                reason_category = "breakeven"
+
+            # Get pair category
+            pair_config = get_config_or_default(symbol)
+            category = pair_config.category.value if hasattr(pair_config.category, 'value') else ""
+
+            # Record trade in lessons system
+            trade_record = TradeRecord(
+                trade_id=f"{symbol}_{int(datetime.now(timezone.utc).timestamp())}",
+                symbol=symbol,
+                direction=trade.side if hasattr(trade, 'side') else "buy",
+                amount=trade.amount if hasattr(trade, 'amount') else 0,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                pnl_usd=pnl,
+                pnl_pct=pnl_pct,
+                duration_min=duration_min,
+                stop_loss=trade.stop_loss if hasattr(trade, 'stop_loss') else 0,
+                take_profit=trade.take_profit if hasattr(trade, 'take_profit') else 0,
+                confidence_at_entry=0.5,  # Default; enhanced when LLM drives entries
+                reasons_at_entry=[],
+                close_reason=reason_category,
+                category=category,
+                timeframe=self.config.timeframe,
+                closed_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            self.lessons.record_trade(trade_record)
+
+            # Increment reflection counter
+            self._trades_since_reflection += 1
+
+            # Trigger pattern re-analysis every N trades
+            if self._trades_since_reflection >= self._reflection_interval:
+                self._trades_since_reflection = 0
+                self.trading_memory.analyze_patterns()
+                log.info(f"[Learning] Pattern analysis triggered after {self._reflection_interval} trades")
+
+                # Check for config evolution suggestions
+                suggestions = self.trading_memory.suggest_config_changes()
+                if suggestions:
+                    for s in suggestions:
+                        log.info(f"[Learning] Config suggestion: {s['parameter']} "
+                                 f"{s['current']} → {s['suggested']} ({s['reason']})")
+
+            # Log learning status
+            stats = self.lessons.get_stats()
+            log.info(f"[Learning] Trade recorded | Total lessons: {stats['total_lessons']} | "
+                     f"Trades tracked: {stats['total_trades_recorded']}")
+
+        except Exception as e:
+            log.warning(f"[Learning] Failed to record trade: {e}")
+
+    # ──────────────────────────────────────────
     # Utilities
     # ──────────────────────────────────────────
 
@@ -631,6 +744,7 @@ class ChastiefollCrypto:
     def _print_summary(self):
         """Print session summary on shutdown."""
         status = self.risk_manager.get_status()
+        learning_stats = self.lessons.get_stats()
         log.info(f"\n{'='*60}")
         log.info(f"  SESSION SUMMARY")
         log.info(f"{'='*60}")
@@ -641,6 +755,10 @@ class ChastiefollCrypto:
         log.info(f"  Final Balance: ${status['balance']:,.2f}")
         log.info(f"  Max Drawdown:  {status['drawdown_pct']:.1f}%")
         log.info(f"  Signals Found: {len(self._signal_history)}")
+        log.info(f"  ─── Learning ───")
+        log.info(f"  Lessons:       {learning_stats['total_lessons']}")
+        log.info(f"  Trades Logged: {learning_stats['total_trades_recorded']}")
+        log.info(f"  Patterns:      {self.trading_memory.get_stats()['total_patterns']}")
         log.info(f"{'='*60}\n")
 
     def get_status(self) -> Dict:
@@ -653,6 +771,11 @@ class ChastiefollCrypto:
             "risk": self.risk_manager.get_status() if self.risk_manager else {},
             "connector": self.connector.get_stats() if self.connector else {},
             "data_feed": self.data_feed.get_status() if self.data_feed else {},
+            "learning": {
+                "lessons": self.lessons.get_stats(),
+                "patterns": self.trading_memory.get_stats(),
+                "trades_since_reflection": self._trades_since_reflection,
+            },
         }
 
 
