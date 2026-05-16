@@ -349,14 +349,26 @@ class TelegramNotifier:
     async def send_system_status(self, status: str):
         """Send system status notification (startup/shutdown)."""
         emoji = "🟢" if status == "online" else "🔴"
+
+        # Try to get pair count
+        pair_info = "100 USDT pairs"
+        try:
+            from Analysis.crypto_pair_config import CRYPTO_CONFIGS
+            pair_info = f"{len(CRYPTO_CONFIGS)} USDT pairs"
+        except ImportError:
+            pass
+
         msg = (
             f"{emoji} *CHASTIEFOL {status.upper()}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Status: *{status}*\n"
             f"Time: `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}`\n"
-            f"Mode: `Multi-Pair Automated Trading`\n"
-            f"Pairs: `XAUUSD` | `BTCUSD`\n"
-            f"\n_Chastiefol v3.0_"
+            f"Mode: `Autonomous Crypto Trading`\n"
+            f"Exchange: `Binance (Spot + Futures)`\n"
+            f"Pairs: `{pair_info}`\n"
+            f"Data: `CCXT + WebSocket + CoinGecko`\n"
+            f"Learning: `Enabled (persistent lessons)`\n"
+            f"\n_Chastiefol v4.0 — Crypto Edition_"
         )
         await self._enqueue(msg, NotificationType.SYSTEM_STATUS)
 

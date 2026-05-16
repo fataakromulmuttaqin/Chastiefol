@@ -170,6 +170,7 @@ class TelegramCommandHandler:
             "/signals": self._cmd_signals,
             "/performance": self._cmd_performance,
             "/risk": self._cmd_risk,
+            "/pairs": self._cmd_pairs,
             "/ping": self._cmd_ping,
         }
 
@@ -197,10 +198,11 @@ class TelegramCommandHandler:
             "🔔 `/signals` — Recent signals generated\n"
             "🏆 `/performance` — Win rate & statistics\n"
             "🛡️ `/risk` — Risk metrics & drawdown\n"
+            "🪙 `/pairs` — Daftar crypto yang di-tradingkan\n"
             "🏓 `/ping` — Check agent is alive\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "_Chastiefol Multi-Pair Agent_\n"
-            "_XAUUSD | BTCUSD_"
+            "_XAUUSD | Crypto (100 pairs)_"
         )
 
     async def _cmd_status(self) -> str:
@@ -491,6 +493,60 @@ class TelegramCommandHandler:
             f"  Max Positions: `{max_trades}`\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━"
         )
+
+    async def _cmd_pairs(self) -> str:
+        """Show list of tradeable crypto pairs."""
+        try:
+            from Analysis.crypto_pair_config import (
+                CRYPTO_CONFIGS, get_pairs_by_category, CryptoCategory
+            )
+
+            total = len(CRYPTO_CONFIGS)
+
+            # Count by category
+            categories = {}
+            for cfg in CRYPTO_CONFIGS.values():
+                cat = cfg.category.value if hasattr(cfg.category, 'value') else str(cfg.category)
+                categories[cat] = categories.get(cat, 0) + 1
+
+            # Build category lines
+            cat_emojis = {
+                "large_cap": "🏦", "mid_cap": "📊", "small_cap": "🔹",
+                "meme": "🐸", "defi": "🏗️", "ai": "🤖",
+                "layer2": "⚡", "gaming": "🎮", "infrastructure": "🔗",
+            }
+
+            cat_lines = []
+            for cat, count in sorted(categories.items(), key=lambda x: -x[1]):
+                emoji = cat_emojis.get(cat, "•")
+                # Sample pairs for each category
+                sample = [c.symbol.split("/")[0] for c in CRYPTO_CONFIGS.values()
+                          if (c.category.value if hasattr(c.category, 'value') else "") == cat][:6]
+                sample_str = ", ".join(sample)
+                if len([c for c in CRYPTO_CONFIGS.values()
+                       if (c.category.value if hasattr(c.category, 'value') else "") == cat]) > 6:
+                    sample_str += "..."
+                cat_lines.append(f"{emoji} *{cat.replace('_', ' ').title()}* ({count})\n    `{sample_str}`")
+
+            msg = (
+                f"🪙 *DAFTAR CRYPTO — {total} Pairs*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Exchange: *Binance* (Spot + Futures)\n"
+                f"Quote: *USDT*\n\n"
+            )
+            msg += "\n".join(cat_lines)
+            msg += (
+                f"\n\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📡 Data: CCXT + Binance WebSocket\n"
+                f"🧠 Learning: {total} pairs tracked\n"
+                f"_Gunakan tier: top10, top20, defi, ai, meme, all_"
+            )
+            return msg
+
+        except ImportError:
+            return "⚠️ Crypto pair config not available."
+        except Exception as e:
+            return f"⚠️ Error loading pairs: {e}"
 
     async def _cmd_ping(self) -> str:
         """Simple alive check with latency."""

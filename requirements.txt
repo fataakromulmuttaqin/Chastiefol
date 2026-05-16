@@ -40,7 +40,14 @@ asyncpg>=0.29
 
 # ── Additional Data Sources ──
 websockets>=12.0            # TradingView WebSocket (fallback data feed)
-# ccxt>=4.0                 # Multi-exchange connector
+
+# ── Crypto Trading (Binance + Multi-Exchange) ──
+ccxt>=4.0                   # CCXT: unified crypto exchange API (Binance, 100+ exchanges)
+                            # Docs: https://docs.ccxt.com
+                            # GitHub: https://github.com/ccxt/ccxt
+                            # Provides: OHLCV (api.binance.com/api/v3/klines), ticker,
+                            # order execution, account balance, order book
+                            # Also supports historical data from data.binance.vision
 
 # ── Backtesting ──
 # matplotlib>=3.8

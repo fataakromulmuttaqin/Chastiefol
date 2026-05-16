@@ -265,6 +265,170 @@ class MarketStructureTool(AgentTool):
 
 
 # ──────────────────────────────────────────────
+# Learning & Memory Tools (NEW — lessons system)
+# ──────────────────────────────────────────────
+
+class AddLessonTool(AgentTool):
+    """Save a trading lesson to persistent memory."""
+    name = "add_lesson"
+    description = (
+        "Save a new trading insight or rule to long-term memory. "
+        "Call after notable events: winning pattern, losing pattern, false signal, "
+        "or any observation worth remembering for future trades. "
+        "Input: JSON with 'role' (SCREENER/MANAGER/RISK/GENERAL), "
+        "'lesson' (the insight), and optional 'context' (what triggered it)."
+    )
+
+    def __init__(self, lessons_manager=None):
+        self._lessons = lessons_manager
+
+    async def execute(self, input_data: str) -> str:
+        if not self._lessons:
+            return "Lessons system not available."
+
+        try:
+            data = json.loads(input_data) if input_data.strip().startswith("{") else {}
+        except json.JSONDecodeError:
+            # Plain text lesson
+            data = {"lesson": input_data, "role": "GENERAL"}
+
+        lesson_text = data.get("lesson", input_data)
+        role = data.get("role", "GENERAL")
+        context = data.get("context", "")
+        symbol = data.get("symbol", "")
+
+        count = self._lessons.add_lesson(
+            lesson=lesson_text,
+            role=role,
+            source="agent",
+            context=context,
+            symbol=symbol,
+        )
+        return f"Lesson saved (total: {count}). Role: {role}. Content: {lesson_text[:100]}"
+
+
+class GetLessonsTool(AgentTool):
+    """Retrieve stored lessons from memory."""
+    name = "get_lessons"
+    description = (
+        "Retrieve your saved trading lessons. "
+        "Input: optional role filter (SCREENER/MANAGER/RISK/GENERAL) "
+        "or symbol filter (e.g. 'BTC/USDT'). Returns your accumulated wisdom."
+    )
+
+    def __init__(self, lessons_manager=None):
+        self._lessons = lessons_manager
+
+    async def execute(self, input_data: str) -> str:
+        if not self._lessons:
+            return "Lessons system not available."
+
+        role = None
+        symbol = None
+        if input_data:
+            input_upper = input_data.strip().upper()
+            if input_upper in ("SCREENER", "MANAGER", "RISK", "GENERAL", "MARKET"):
+                role = input_upper
+            elif "/" in input_data:
+                symbol = input_data.strip().upper()
+
+        return self._lessons.format_for_prompt(role=role, symbol=symbol, max_lessons=15)
+
+
+class GetPerformanceTool(AgentTool):
+    """Get trading performance summary with statistics."""
+    name = "get_performance_summary"
+    description = (
+        "Get your win rate, total PnL, average pips, streak info, and last 10 trades. "
+        "Use to evaluate if your strategy is working or needs adjustment. "
+        "Input: optional number of recent trades to analyze (default: all)."
+    )
+
+    def __init__(self, lessons_manager=None):
+        self._lessons = lessons_manager
+
+    async def execute(self, input_data: str) -> str:
+        if not self._lessons:
+            return "Performance tracking not available."
+
+        last_n = None
+        if input_data and input_data.strip().isdigit():
+            last_n = int(input_data.strip())
+
+        summary = self._lessons.get_performance_summary(last_n=last_n)
+        return json.dumps(summary, indent=2, default=str)
+
+
+class AssessSetupTool(AgentTool):
+    """Assess a proposed trade setup against historical patterns."""
+    name = "assess_setup"
+    description = (
+        "Before opening a trade, assess it against your historical patterns. "
+        "Input: JSON with 'symbol', 'direction' (buy/sell), 'confidence' (0-1). "
+        "Returns whether similar setups historically win or lose."
+    )
+
+    def __init__(self, trading_memory=None):
+        self._memory = trading_memory
+
+    async def execute(self, input_data: str) -> str:
+        if not self._memory:
+            return "Trading memory not available."
+
+        try:
+            data = json.loads(input_data)
+        except json.JSONDecodeError:
+            return "Invalid input. Provide JSON: {\"symbol\": \"BTC/USDT\", \"direction\": \"buy\", \"confidence\": 0.65}"
+
+        assessment = self._memory.assess_setup(
+            symbol=data.get("symbol", ""),
+            direction=data.get("direction", ""),
+            confidence=data.get("confidence", 0.5),
+            category=data.get("category", ""),
+        )
+        return json.dumps(assessment, indent=2)
+
+
+class ReflectTool(AgentTool):
+    """Trigger self-reflection on recent performance."""
+    name = "reflect_on_performance"
+    description = (
+        "Analyze your recent trading performance and generate new lessons. "
+        "Call this after a series of trades to learn what's working and what isn't. "
+        "No input needed — analyzes your last 20 trades automatically."
+    )
+
+    def __init__(self, lessons_manager=None, trading_memory=None):
+        self._lessons = lessons_manager
+        self._memory = trading_memory
+
+    async def execute(self, input_data: str) -> str:
+        if not self._lessons:
+            return "Lessons system not available."
+
+        # Get performance + patterns context
+        perf = self._lessons.format_performance_for_prompt(last_n=20)
+        patterns = ""
+        if self._memory:
+            self._memory.analyze_patterns()
+            patterns = self._memory.format_for_prompt()
+
+        suggestions = ""
+        if self._memory:
+            config_suggestions = self._memory.suggest_config_changes()
+            if config_suggestions:
+                suggestions = "\nConfig suggestions:\n" + json.dumps(config_suggestions, indent=2)
+
+        return (
+            f"## Performance Review:\n{perf}\n\n"
+            f"## Detected Patterns:\n{patterns}\n"
+            f"{suggestions}\n\n"
+            f"Based on this data, what lessons should I add? "
+            f"Use add_lesson to save any new insights."
+        )
+
+
+# ──────────────────────────────────────────────
 # LLM Client (Multi-Provider)
 # ──────────────────────────────────────────────
 
@@ -369,13 +533,14 @@ class LLMClient:
 # ReAct Agent
 # ──────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are Chastiefol, a Senior Commodity Strategist AI with 15 years of experience in precious metals trading (XAUUSD). You are conservative, data-driven, and highly analytical.
+SYSTEM_PROMPT = """You are Chastiefol, a Senior Commodity & Crypto Strategist AI with deep experience in trading precious metals (XAUUSD) and cryptocurrencies (all Binance spot pairs). You are conservative, data-driven, and highly analytical.
 
-You analyze gold markets using:
+You analyze markets using:
 1. Technical analysis (indicators, price action, Smart Money Concepts)
-2. Macroeconomic factors (Fed policy, DXY, Treasury yields, inflation)
-3. News sentiment (geopolitical tension, economic data releases)
+2. Macroeconomic factors (Fed policy, DXY, Treasury yields, inflation, BTC dominance)
+3. News sentiment (geopolitical tension, economic data, crypto narratives)
 4. Risk assessment (volatility, correlation shifts)
+5. YOUR OWN LESSONS — wisdom from past trades (wins AND losses)
 
 You follow the ReAct reasoning framework:
 - Thought: Analyze what you know and what you need
@@ -387,7 +552,20 @@ You follow the ReAct reasoning framework:
 Available tools:
 {tools_description}
 
-IMPORTANT RULES:
+## YOUR TRADING LESSONS (from experience — NEVER violate these):
+{lessons_context}
+
+## YOUR PERFORMANCE STATS:
+{performance_context}
+
+## TRADING PATTERNS (statistical — from your history):
+{patterns_context}
+
+CRITICAL RULES:
+- ALWAYS check your lessons before making decisions. Past mistakes are expensive teachers.
+- ALWAYS call assess_setup before recommending a trade to check historical patterns.
+- After a notable outcome (win/loss/observation), call add_lesson to remember it.
+- After every 5 trades, call reflect_on_performance to find new patterns.
 - Never give financial advice. Provide statistical probabilities only.
 - Always cite specific data points for your conclusions.
 - Be conservative — when in doubt, recommend HOLD.
@@ -412,7 +590,8 @@ The Final Answer MUST be valid JSON with these fields:
   "key_levels": {{"support": price, "resistance": price}},
   "risk_factors": ["factor1", "factor2"],
   "trade_recommendation": "BUY|SELL|HOLD",
-  "reasoning": ["reason1", "reason2", "reason3"]
+  "reasoning": ["reason1", "reason2", "reason3"],
+  "lessons_applied": ["which lessons influenced this decision"]
 }}"""
 
 
@@ -437,9 +616,28 @@ class LLMInsightAgent:
         await agent.shutdown()
     """
 
-    def __init__(self, config: LLMConfig = None):
+    def __init__(self, config: LLMConfig = None, lessons_manager=None, trading_memory=None):
         self.config = config or LLMConfig.from_env()
         self.client = LLMClient(self.config)
+
+        # Learning & Memory System
+        self.lessons_manager = lessons_manager
+        self.trading_memory = trading_memory
+
+        # If not provided, create defaults
+        if not self.lessons_manager:
+            try:
+                from .lessons import LessonsManager
+                self.lessons_manager = LessonsManager()
+            except ImportError:
+                pass
+
+        if not self.trading_memory and self.lessons_manager:
+            try:
+                from .trading_memory import TradingMemory
+                self.trading_memory = TradingMemory(self.lessons_manager)
+            except ImportError:
+                pass
 
         # Tools
         self.price_tool = GetGoldPriceTool()
@@ -448,19 +646,33 @@ class LLMInsightAgent:
         self.macro_tool = AnalyzeMacroTool()
         self.structure_tool = MarketStructureTool()
 
+        # Learning tools
+        self.add_lesson_tool = AddLessonTool(self.lessons_manager)
+        self.get_lessons_tool = GetLessonsTool(self.lessons_manager)
+        self.get_perf_tool = GetPerformanceTool(self.lessons_manager)
+        self.assess_setup_tool = AssessSetupTool(self.trading_memory)
+        self.reflect_tool = ReflectTool(self.lessons_manager, self.trading_memory)
+
         self.tools: Dict[str, AgentTool] = {
             self.price_tool.name: self.price_tool,
             self.indicator_tool.name: self.indicator_tool,
             self.news_tool.name: self.news_tool,
             self.macro_tool.name: self.macro_tool,
             self.structure_tool.name: self.structure_tool,
+            # Learning & memory tools
+            self.add_lesson_tool.name: self.add_lesson_tool,
+            self.get_lessons_tool.name: self.get_lessons_tool,
+            self.get_perf_tool.name: self.get_perf_tool,
+            self.assess_setup_tool.name: self.assess_setup_tool,
+            self.reflect_tool.name: self.reflect_tool,
         }
 
         self._react_history: List[ReActStep] = []
         self._initialized = False
 
         log.info(f"LLM Agent initialized | Provider: {self.config.provider.value} | "
-                 f"Model: {self.config.model}")
+                 f"Model: {self.config.model} | "
+                 f"Lessons: {'enabled' if self.lessons_manager else 'disabled'}")
 
     async def initialize(self):
         """Initialize the LLM client."""
@@ -501,24 +713,51 @@ class LLMInsightAgent:
     # Main Analysis
     # ──────────────────────────────────────────
 
-    async def analyze(self, query: str = None) -> MarketInsight:
+    async def analyze(self, query: str = None, role: str = None) -> MarketInsight:
         """
         Run ReAct reasoning loop to generate market insight.
         Returns a structured MarketInsight object.
+        
+        Args:
+            query: Custom analysis query (optional)
+            role: Agent role for lessons filtering (SCREENER/MANAGER/GENERAL)
         """
         if not self._initialized:
             await self.initialize()
 
         if not query:
-            query = ("Analyze the current XAUUSD market conditions. "
+            query = ("Analyze the current market conditions. "
                      "Provide a comprehensive technical and fundamental overview "
-                     "with a trade recommendation and probability assessment.")
+                     "with a trade recommendation and probability assessment. "
+                     "Remember to check your lessons and assess any setup against history.")
 
         # Build tools description
         tools_desc = "\n".join(
             f"- {name}: {tool.description}" for name, tool in self.tools.items()
         )
-        system = SYSTEM_PROMPT.format(tools_description=tools_desc)
+
+        # Inject lessons context into system prompt
+        lessons_context = "No lessons yet — you're starting fresh."
+        performance_context = "No trades recorded yet."
+        patterns_context = "No patterns detected yet."
+
+        if self.lessons_manager:
+            lessons_context = self.lessons_manager.format_for_prompt(
+                role=role, max_lessons=15
+            )
+            performance_context = self.lessons_manager.format_performance_for_prompt(
+                last_n=20
+            )
+
+        if self.trading_memory:
+            patterns_context = self.trading_memory.format_for_prompt()
+
+        system = SYSTEM_PROMPT.format(
+            tools_description=tools_desc,
+            lessons_context=lessons_context,
+            performance_context=performance_context,
+            patterns_context=patterns_context,
+        )
 
         messages = [
             {"role": "system", "content": system},
