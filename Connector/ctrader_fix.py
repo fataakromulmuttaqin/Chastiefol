@@ -101,6 +101,7 @@ class FIXSymbolMap:
     # Check cTrader Desktop → Symbol Info or use Open API.
     _DEFAULT_MAP: Dict[str, str] = {
         "XAUUSD": "41",
+        "BTCUSD": "22395",
     }
 
     def __init__(self, custom_map: Optional[Dict[str, str]] = None):

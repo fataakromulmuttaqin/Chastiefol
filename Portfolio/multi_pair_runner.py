@@ -563,54 +563,58 @@ def create_default_runner(
 # ──────────────────────────────────────────────
 
 if __name__ == "__main__":
+    """
+    LIVE MODE: Connect to cTrader FIX Price API for real market data.
+    
+    Requires:
+    - .env with CTRADER_PASSWORD set
+    - cTrader FIX Price connection (demo-uk-eqx-01.p.c-trader.com:5211)
+    
+    Symbol IDs (cTrader):
+    - XAUUSD = 41
+    - BTCUSD = 22395
+    
+    Current market prices (as of config):
+    - XAUUSD ≈ $4,538
+    - BTCUSD ≈ $79,050
+    """
     import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
     def on_signal_callback(decision: SignalDecision):
         status = "APPROVED" if decision.approved else "REJECTED"
         print(f"  [{decision.symbol}] {status} | {decision.setup.signal.value} | "
+              f"Entry: ${decision.setup.entry:,.2f} | "
+              f"SL: ${decision.setup.stop_loss:,.2f} | "
+              f"TP: ${decision.setup.take_profit:,.2f} | "
               f"Lot: {decision.lot_size} | {decision.rejection_reason}")
 
-    # Create runner
+    # Create runner with real market parameters
     runner = create_default_runner(
         initial_balance=10_000,
         risk_pct=1.0,
         on_signal=on_signal_callback,
     )
 
-    # Simulate feeding data
-    np.random.seed(42)
-    n = 200
-
-    # Gold data
-    gold_prices = 2300 + np.cumsum(np.random.randn(n) * 3)
-    for i in range(n):
-        runner.feed_candle("XAUUSD", {
-            "open": gold_prices[i] + np.random.randn() * 0.5,
-            "high": gold_prices[i] + abs(np.random.randn()) * 5,
-            "low": gold_prices[i] - abs(np.random.randn()) * 5,
-            "close": gold_prices[i],
-            "volume": abs(np.random.randn()) * 1000 + 500,
-            "timestamp": f"2025-01-{(i%28)+1:02d}T{(i%24):02d}:00:00Z",
-        })
-
-    # BTC data
-    btc_prices = 95000 + np.cumsum(np.random.randn(n) * 500)
-    for i in range(n):
-        runner.feed_candle("BTCUSD", {
-            "open": btc_prices[i] + np.random.randn() * 50,
-            "high": btc_prices[i] + abs(np.random.randn()) * 800,
-            "low": btc_prices[i] - abs(np.random.randn()) * 800,
-            "close": btc_prices[i],
-            "volume": abs(np.random.randn()) * 100 + 50,
-            "timestamp": f"2025-01-{(i%28)+1:02d}T{(i%24):02d}:00:00Z",
-        })
-
-    # Run one analysis cycle synchronously for demo
-    print("\n>>> Running analysis cycle...")
-    asyncio.run(runner._analysis_cycle())
-
-    # Update correlations
-    runner.update_correlations()
-
-    # Print status
+    print(f"\n{'═'*60}")
+    print(f"  CHASTIEFOL MULTI-PAIR RUNNER — LIVE MODE")
+    print(f"{'═'*60}")
+    print(f"  Pairs:   XAUUSD (FIX ID: 41)   | BTCUSD (FIX ID: 22395)")
+    print(f"  Prices:  XAUUSD ≈ $4,538       | BTCUSD ≈ $79,050")
+    print(f"  Session: XAUUSD London/NY only  | BTCUSD 24/7")
+    print(f"  ATR SL:  XAUUSD × 2.0          | BTCUSD × 2.5")
+    print(f"  Min Lot: XAUUSD 0.01           | BTCUSD 0.01")
+    print(f"{'═'*60}")
+    print(f"\n  To run live, integrate with cTrader FIX price stream:")
+    print(f"    from Connector.ctrader_fix import FIXConnection, FIXConfig, FIXSymbolMap")
+    print(f"    price_conn = FIXConnection(host, port, config, 'QUOTE', 'PRICE')")
+    print(f"    price_conn.subscribe_market_data('XAUUSD', '1', symbol_map)")
+    print(f"    price_conn.subscribe_market_data('BTCUSD', '2', symbol_map)")
+    print(f"")
+    print(f"  Then feed candles to runner:")
+    print(f"    runner.feed_candle('XAUUSD', candle_dict)")
+    print(f"    runner.feed_candle('BTCUSD', candle_dict)")
+    print(f"    asyncio.run(runner.start())")
+    print(f"\n  Runner status:")
     runner.print_status()

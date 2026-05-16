@@ -133,7 +133,7 @@ BTCUSD_CONFIG = PairConfig(
     min_adx=20,
     min_confluence=50,
 
-    # FVG: percentage-based (0.05% of price ≈ $50 at $100k)
+    # FVG: percentage-based (0.05% of price ≈ $40 at $79,050)
     min_fvg_size=50.0,
     min_fvg_pct=0.05,
 
