@@ -69,6 +69,7 @@ class IntegratedConfig:
     # Agent Mode
     mode: AgentMode = AgentMode.HYBRID
     symbol: str = "XAUUSD"
+    instance_id: int = 0          # 0=XAUUSD (port 8080), 1=BTCUSD (port 8081)
     paper_mode: bool = True
 
     # Account
@@ -129,6 +130,7 @@ class IntegratedConfig:
         return cls(
             mode=AgentMode(os.getenv("AGENT_MODE", "hybrid")),
             symbol=os.getenv("SYMBOL", "XAUUSD"),
+            instance_id=int(os.getenv("INSTANCE_ID", "0")),
             paper_mode=os.getenv("PAPER_MODE", "true").lower() == "true",
             initial_balance=float(os.getenv("INITIAL_BALANCE", "10000")),
             risk_pct=float(os.getenv("RISK_PCT", "1.0")),
@@ -138,7 +140,7 @@ class IntegratedConfig:
             max_drawdown_pct=float(os.getenv("MAX_DRAWDOWN_PCT", "10.0")),
             max_open_trades=int(os.getenv("MAX_OPEN_TRADES", "2")),
             scan_interval_sec=int(os.getenv("SCAN_INTERVAL_SEC", "60")),
-            webhook_port=int(os.getenv("WEBHOOK_PORT", "8080")),
+            webhook_port=int(os.getenv("WEBHOOK_PORT", str(8080 + int(os.getenv("INSTANCE_ID", "0"))))),
             webhook_secret=os.getenv("WEBHOOK_SECRET", ""),
             webhook_hmac_enabled=os.getenv("WEBHOOK_HMAC_ENABLED", "true").lower() == "true",
             ctrader_mcp_url=os.getenv("CTRADER_MCP_URL", "https://mcp.ctrader.com/trading/mcp"),
@@ -233,6 +235,7 @@ class ChastiefollIntegrated:
         log.info(f"  CHASTIEFOL INTEGRATED AGENT")
         log.info(f"  Mode: {self.config.mode.value.upper()}")
         log.info(f"  Symbol: {self.config.symbol}")
+        log.info(f"  Instance: {self.config.instance_id} (webhook port {self.config.webhook_port})")
         log.info(f"  Execution: {self.config.execution_method.upper()}")
         log.info(f"  Paper: {self.config.paper_mode}")
         log.info(f"{'='*55}")
@@ -261,11 +264,19 @@ class ChastiefollIntegrated:
         if any([self.config.twelvedata_api_key,
                 self.config.alphavantage_api_key,
                 self.config.goldapi_api_key]):
+            # Map internal symbol to data feed provider format
+            # XAUUSD → "XAU/USD", BTCUSD → "BTC/USD"
+            feed_symbol = self.config.symbol
+            if feed_symbol == "XAUUSD":
+                feed_symbol = "XAU/USD"
+            elif feed_symbol == "BTCUSD":
+                feed_symbol = "BTC/USD"
+
             feed_config = DataFeedConfig(
                 twelvedata_api_key=self.config.twelvedata_api_key,
                 alphavantage_api_key=self.config.alphavantage_api_key,
                 goldapi_api_key=self.config.goldapi_api_key,
-                symbol="XAU/USD",
+                symbol=feed_symbol,
                 default_timeframe=Timeframe(self.config.timeframe.lower()
                     .replace("h1", "1h").replace("h4", "4h")
                     .replace("m1", "1min").replace("m5", "5min")
