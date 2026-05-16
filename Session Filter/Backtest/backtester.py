@@ -1,6 +1,7 @@
 """
 Chastiefol — Backtesting Engine
-Walk-forward validation + Monte Carlo simulation for XAUUSD strategy.
+Walk-forward validation + Monte Carlo simulation for multi-pair strategy.
+Supports: XAUUSD, BTCUSD (via PairConfig)
 """
 
 import numpy as np
@@ -11,8 +12,9 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from Analysis.xauusd_engine import ChastiefollAgent, Signal, TradeSetup
+from Analysis.pair_config   import PairConfig, XAUUSD_CONFIG, get_pair_config
 from Risk.risk_manager      import (
-    AccountState, DrawdownGuard, PositionSizer, GoldSessionFilter, RiskModel
+    AccountState, DrawdownGuard, PositionSizer, SessionFilter, GoldSessionFilter, RiskModel
 )
 
 
@@ -20,12 +22,13 @@ from Risk.risk_manager      import (
 class BacktestConfig:
     initial_balance:     float = 10_000.0
     risk_pct:            float = 1.0
-    spread_pips:         float = 0.30     # typical XAUUSD spread
+    spread_pips:         float = 0.30     # typical spread (overridden by pair_config)
     commission_per_lot:  float = 3.50     # USD per lot round-trip
     slippage_pips:       float = 0.10
-    atr_sl_mult:         float = 2.0      # INCREASED from 1.5 — wider stops for gold volatility
+    atr_sl_mult:         float = 2.0      # ATR SL multiplier (overridden by pair_config)
     rr_target:           float = 2.0
-    min_confluence:      int   = 50       # LOWERED from 55 — new scoring system is better calibrated
+    min_confluence:      int   = 50       # minimum confluence score
+    pair_symbol:         str   = "XAUUSD" # symbol key for pair config lookup
 
 
 @dataclass
@@ -64,7 +67,7 @@ class BacktestResult:
     def summary(self) -> str:
         return (
             f"\n{'='*52}\n"
-            f"  CHASTIEFOL BACKTEST RESULTS — XAUUSD\n"
+            f"  CHASTIEFOL BACKTEST RESULTS\n"
             f"{'='*52}\n"
             f"  Total Trades:       {self.total_trades}\n"
             f"  Win Rate:           {self.win_rate*100:.1f}%\n"
@@ -83,23 +86,38 @@ class BacktestResult:
 
 class Backtester:
     """
-    Event-driven backtester for Chastiefol XAUUSD strategy.
+    Event-driven backtester for Chastiefol multi-pair strategy.
     Supports:
       - Walk-forward optimization
       - Out-of-sample validation
       - Monte Carlo simulation
       - Commission + spread + slippage modeling
+      - Multi-pair via PairConfig (XAUUSD, BTCUSD, etc.)
     """
 
-    def __init__(self, config: BacktestConfig = None):
+    def __init__(self, config: BacktestConfig = None, pair_config: PairConfig = None):
         self.config = config or BacktestConfig()
-        self.agent  = ChastiefollAgent()
-        self.sizer  = PositionSizer(
-            risk_pct=self.config.risk_pct,
-            model=RiskModel.FIXED_PERCENT
+
+        # Resolve pair config
+        if pair_config:
+            self.pair_config = pair_config
+        else:
+            self.pair_config = get_pair_config(self.config.pair_symbol)
+
+        # Apply pair-specific defaults to backtest config
+        self.config.spread_pips = self.pair_config.typical_spread
+        self.config.commission_per_lot = self.pair_config.commission_per_lot
+        self.config.slippage_pips = self.pair_config.slippage
+        self.config.atr_sl_mult = self.pair_config.atr_sl_multiplier
+        self.config.rr_target = self.pair_config.rr_target
+
+        # Initialize components with pair config
+        self.agent  = ChastiefollAgent(pair_config=self.pair_config)
+        self.sizer  = PositionSizer.from_pair_config(
+            self.pair_config, risk_pct=self.config.risk_pct
         )
         self.guard  = DrawdownGuard()
-        self.sess   = GoldSessionFilter()
+        self.sess   = SessionFilter.from_pair_config(self.pair_config)
 
     def run(self, df: pd.DataFrame,
             lookback: int = 100,
@@ -173,12 +191,15 @@ class Backtester:
                 df, i, setup.signal, actual_entry, actual_sl, actual_tp
             )
 
-            # Calculate P&L (XAU: 1 lot = 100oz → $100 per $1 move)
+            # Calculate P&L using pair contract size
+            # XAU: 1 lot = 100oz → $100 per $1 move
+            # BTC: 1 lot = 1 BTC → $1 per $1 move
+            contract_size = self.pair_config.contract_size
             if setup.signal == Signal.BUY:
-                pnl_raw = (exit_price - actual_entry) * lot * 100
+                pnl_raw = (exit_price - actual_entry) * lot * contract_size
                 pnl_pips = exit_price - actual_entry
             else:
-                pnl_raw  = (actual_entry - exit_price) * lot * 100
+                pnl_raw  = (actual_entry - exit_price) * lot * contract_size
                 pnl_pips = actual_entry - exit_price
 
             commission = config.commission_per_lot * lot
@@ -429,15 +450,21 @@ class Backtester:
 # ──────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from Analysis.pair_config import XAUUSD_CONFIG, BTCUSD_CONFIG
+
     np.random.seed(42)
     n = 2000
 
-    # Simulate XAUUSD-like price with trending + mean-reversion components
+    # ── XAUUSD Backtest ──
+    print("\n" + "═"*60)
+    print("  XAUUSD BACKTEST")
+    print("═"*60)
+
     trend  = np.linspace(1800, 2200, n)
     noise  = np.cumsum(np.random.randn(n) * 2.5)
     prices = trend + noise
 
-    df = pd.DataFrame({
+    df_gold = pd.DataFrame({
         "open":   prices + np.random.randn(n) * 0.3,
         "high":   prices + np.abs(np.random.randn(n)) * 5,
         "low":    prices - np.abs(np.random.randn(n)) * 5,
@@ -445,15 +472,33 @@ if __name__ == "__main__":
         "volume": np.abs(np.random.randn(n)) * 1000 + 500,
     })
 
-    config     = BacktestConfig(initial_balance=10_000, risk_pct=1.0)
-    backtester = Backtester(config)
+    config_gold = BacktestConfig(initial_balance=10_000, risk_pct=1.0, pair_symbol="XAUUSD")
+    bt_gold     = Backtester(config_gold)
 
-    print("\n>>> Running backtest...")
-    result = backtester.run(df, lookback=100, verbose=True)
-    print(result.summary())
+    print("\n>>> Running XAUUSD backtest...")
+    result_gold = bt_gold.run(df_gold, lookback=100, verbose=False)
+    print(result_gold.summary())
 
-    print("\n>>> Running walk-forward (5 folds)...")
-    wf_results = backtester.walk_forward(df, n_folds=5)
+    # ── BTCUSD Backtest ──
+    print("\n" + "═"*60)
+    print("  BTCUSD BACKTEST")
+    print("═"*60)
 
-    print("\n>>> Running Monte Carlo...")
-    mc = backtester.monte_carlo(result, n_simulations=1000)
+    trend_btc  = np.linspace(40000, 100000, n)
+    noise_btc  = np.cumsum(np.random.randn(n) * 500)
+    prices_btc = trend_btc + noise_btc
+
+    df_btc = pd.DataFrame({
+        "open":   prices_btc + np.random.randn(n) * 50,
+        "high":   prices_btc + np.abs(np.random.randn(n)) * 800,
+        "low":    prices_btc - np.abs(np.random.randn(n)) * 800,
+        "close":  prices_btc,
+        "volume": np.abs(np.random.randn(n)) * 100 + 50,
+    })
+
+    config_btc = BacktestConfig(initial_balance=10_000, risk_pct=1.0, pair_symbol="BTCUSD")
+    bt_btc     = Backtester(config_btc)
+
+    print("\n>>> Running BTCUSD backtest...")
+    result_btc = bt_btc.run(df_btc, lookback=100, verbose=False)
+    print(result_btc.summary())

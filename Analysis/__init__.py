@@ -18,6 +18,13 @@ from .multi_timeframe import (
     MTFResult,
     TimeframeData,
 )
+from .pair_config import (
+    PairConfig,
+    XAUUSD_CONFIG,
+    BTCUSD_CONFIG,
+    PAIR_CONFIGS,
+    get_pair_config,
+)
 
 __all__ = [
     "ChastiefollAgent",
@@ -31,4 +38,9 @@ __all__ = [
     "MTFConfig",
     "MTFResult",
     "TimeframeData",
+    "PairConfig",
+    "XAUUSD_CONFIG",
+    "BTCUSD_CONFIG",
+    "PAIR_CONFIGS",
+    "get_pair_config",
 ]

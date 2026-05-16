@@ -81,9 +81,9 @@ class TradeLifecycle:
 
 class PositionSizer:
     """
-    Gold-specific position sizing.
-    XAU/USD: 1 standard lot = 100 troy oz.
-    Pip value ≈ $1 per 0.01 price move per 0.01 lot (varies by broker).
+    Multi-pair position sizing.
+    Supports XAU/USD (1 lot = 100 oz) and BTC/USD (1 lot = 1 BTC).
+    Pip value and contract size are configurable per pair.
     """
 
     def __init__(self,
@@ -93,6 +93,7 @@ class PositionSizer:
                  min_lots:         float = 0.01,   # proper micro lot minimum
                  leverage:         int   = 100,
                  pip_value_per_lot: float = 10.0,     # USD per pip per standard lot
+                 contract_size:    float = 100.0,     # units per lot (100 for gold, 1 for BTC)
                  model:            RiskModel = RiskModel.FIXED_PERCENT):
         self.risk_pct          = risk_pct
         self.max_risk_pct      = max_risk_pct
@@ -100,6 +101,7 @@ class PositionSizer:
         self.min_lots          = min_lots
         self.leverage          = leverage
         self.pip_value_per_lot = pip_value_per_lot
+        self.contract_size     = contract_size
         self.model             = model
 
     def calculate(self,
@@ -124,9 +126,10 @@ class PositionSizer:
         risk_pct  = min(risk_pct, self.max_risk_pct)
         risk_usd  = account.balance * (risk_pct / 100)
 
-        # Lot size: risk_usd / (sl_distance * pip_value_per_lot)
-        # For XAU/USD: 1 lot controls 100oz; $1 price move = $100 profit/loss per lot
-        dollar_risk_per_lot = sl_distance_usd * 100   # $100 per $1 move per lot
+        # Lot size: risk_usd / (sl_distance * contract_size)
+        # For XAU/USD: 1 lot = 100oz; $1 price move = $100 P&L per lot
+        # For BTC/USD: 1 lot = 1 BTC; $1 price move = $1 P&L per lot
+        dollar_risk_per_lot = sl_distance_usd * self.contract_size
         if dollar_risk_per_lot == 0:
             lot_size = self.min_lots
         else:
@@ -162,6 +165,24 @@ class PositionSizer:
         # Lower risk when volatility is high
         adjusted  = base_risk * (0.01 / max(vol_ratio, 0.001))
         return min(adjusted, self.max_risk_pct)
+
+    @classmethod
+    def from_pair_config(cls, pair_config, risk_pct: float = 1.0,
+                         model: RiskModel = RiskModel.FIXED_PERCENT) -> "PositionSizer":
+        """
+        Create a PositionSizer from a PairConfig object.
+        
+        Usage:
+            from Analysis.pair_config import BTCUSD_CONFIG
+            sizer = PositionSizer.from_pair_config(BTCUSD_CONFIG, risk_pct=1.0)
+        """
+        return cls(
+            risk_pct=risk_pct,
+            max_lots=pair_config.max_lot_size,
+            min_lots=pair_config.min_lot_size,
+            contract_size=pair_config.contract_size,
+            model=model,
+        )
 
 
 # ──────────────────────────────────────────────
@@ -340,16 +361,18 @@ class TradeManager:
 
 
 # ──────────────────────────────────────────────
-# Session Filter (XAUUSD-specific)
+# Session Filter (Multi-Pair)
 # ──────────────────────────────────────────────
 
-class GoldSessionFilter:
+class SessionFilter:
     """
-    Gold is most liquid and trendy during London and New York sessions.
-    Kill zones (ICT concept): highest probability trade windows.
+    Generic session filter supporting multiple instruments.
+    - Gold: London + NY sessions (most liquid)
+    - Crypto: 24/7 with optional high-volume hour preference
     All times in UTC.
     """
 
+    # Pre-defined session windows
     SESSIONS = {
         "London_Open_Killzone":   (7, 0,  9, 0),    # 07:00-09:00 UTC (highest prob)
         "London_Session":         (7, 0, 16, 0),    # 07:00-16:00 UTC (full London)
@@ -358,17 +381,34 @@ class GoldSessionFilter:
         "London_NY_Overlap":      (12, 0, 16, 0),   # 12:00-16:00 UTC (best liquidity)
         "London_Close":           (15, 0, 17, 0),   # 15:00-17:00 UTC
         "Asian_Range":            (0, 0,  5, 0),    # 00:00-05:00 UTC (low vol)
+        "US_Market_Hours":        (13, 30, 20, 0),  # 13:30-20:00 UTC (crypto vol peak)
     }
 
-    HIGH_PROBABILITY = ["London_Session", "New_York_Session"]
+    def __init__(self, active_sessions: list[str] = None,
+                 always_active: bool = False):
+        """
+        Args:
+            active_sessions: List of session names to consider "active".
+                           If None, defaults to London + NY (gold behavior).
+            always_active: If True, is_active() always returns True (for 24/7 crypto).
+        """
+        self.always_active = always_active
+        if active_sessions is not None:
+            self.active_sessions = active_sessions
+        else:
+            self.active_sessions = ["London_Session", "New_York_Session"]
 
     def is_active(self, utc_hour: int, utc_minute: int = 0,
-                  high_prob_only: bool = True) -> tuple[bool, str]:
+                  high_prob_only: bool = False) -> tuple[bool, str]:
         """Returns (is_active, session_name)."""
-        time_decimal = utc_hour + utc_minute / 60
-        sessions     = self.HIGH_PROBABILITY if high_prob_only else list(self.SESSIONS.keys())
+        if self.always_active:
+            return True, "24/7"
 
-        for name in sessions:
+        time_decimal = utc_hour + utc_minute / 60
+
+        for name in self.active_sessions:
+            if name not in self.SESSIONS:
+                continue
             sh, sm, eh, em = self.SESSIONS[name]
             start = sh + sm / 60
             end   = eh + em / 60
@@ -376,6 +416,30 @@ class GoldSessionFilter:
                 return True, name
 
         return False, "Off-session"
+
+    @classmethod
+    def for_gold(cls) -> "SessionFilter":
+        """Factory: session filter for XAUUSD (London + NY)."""
+        return cls(active_sessions=["London_Session", "New_York_Session"])
+
+    @classmethod
+    def for_crypto(cls) -> "SessionFilter":
+        """Factory: 24/7 always active (BTC/crypto)."""
+        return cls(always_active=True)
+
+    @classmethod
+    def from_pair_config(cls, pair_config) -> "SessionFilter":
+        """
+        Create a SessionFilter from a PairConfig.
+        If use_session_filter=False, returns always-active filter.
+        """
+        if not pair_config.use_session_filter:
+            return cls(always_active=True)
+        return cls(active_sessions=pair_config.high_prob_sessions)
+
+
+# Keep backward-compatible alias
+GoldSessionFilter = SessionFilter
 
 
 # ──────────────────────────────────────────────

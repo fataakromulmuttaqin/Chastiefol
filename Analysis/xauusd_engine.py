@@ -37,6 +37,7 @@ class TradeSetup:
     confluence:  int          # count of confirming factors
     reasons:     list[str] = field(default_factory=list)
     timeframe:   str = "H1"
+    symbol:      str = "XAUUSD"
 
     @property
     def risk_pips(self) -> float:
@@ -256,7 +257,8 @@ class MarketStructureAnalyzer:
 
         return swing_highs, swing_lows
 
-    def detect_structure(self, df: pd.DataFrame) -> MarketStructure:
+    def detect_structure(self, df: pd.DataFrame,
+                           fvg_min_size: float = 0.5) -> MarketStructure:
         swing_highs, swing_lows = self.find_swing_points(df)
 
         valid_highs = swing_highs.dropna().tail(4)
@@ -295,7 +297,7 @@ class MarketStructureAnalyzer:
                 choch = True
 
         order_blocks    = self._find_order_blocks(df, bias)
-        fair_value_gaps = self._find_fvg(df)
+        fair_value_gaps = self._find_fvg(df, fvg_min_size=fvg_min_size)
 
         return MarketStructure(
             bias=bias,
@@ -353,7 +355,8 @@ class MarketStructureAnalyzer:
 
         return blocks[-3:] if blocks else []  # most recent 3
 
-    def _find_fvg(self, df: pd.DataFrame, lookback: int = 30) -> list[dict]:
+    def _find_fvg(self, df: pd.DataFrame, lookback: int = 30,
+                  fvg_min_size: float = 0.5) -> list[dict]:
         """
         Fair Value Gap: 3-candle pattern where candle[i+2].low > candle[i].high
         (bullish FVG) or candle[i+2].high < candle[i].low (bearish FVG).
@@ -381,8 +384,8 @@ class MarketStructureAnalyzer:
                     "size":   c0["low"] - c2["high"],
                 })
 
-        # Return significant gaps only (size > 0.5 USD for gold)
-        return [g for g in gaps if g["size"] > 0.5][-5:]
+        # Return significant gaps only (threshold depends on pair)
+        return [g for g in gaps if g["size"] > fvg_min_size][-5:]
 
 
 # ──────────────────────────────────────────────
@@ -544,22 +547,40 @@ class ChastiefollAgent:
     """
     Core Chastiefol trading agent.
     Combines technical analysis, SMC structure, and confluence scoring
-    to produce actionable trade setups for XAUUSD.
+    to produce actionable trade setups for any supported pair.
+
+    Supports: XAUUSD, BTCUSD (via PairConfig)
     """
 
+    # Default thresholds (can be overridden by PairConfig)
     MINIMUM_CONFLUENCE_SCORE = 50   # lowered: was 55, allows more trades with improved filters
     MINIMUM_RR = 1.5                # minimum reward:risk ratio
     MINIMUM_ADX = 20                # ADX threshold — only trade in trending markets
 
-    def __init__(self):
+    def __init__(self, pair_config=None):
+        """
+        Initialize agent with optional PairConfig.
+        If no config is provided, defaults to XAUUSD behavior.
+        
+        Args:
+            pair_config: Optional PairConfig instance (from pair_config.py)
+        """
+        from .pair_config import PairConfig, XAUUSD_CONFIG
+        self.pair_config        = pair_config or XAUUSD_CONFIG
         self.structure_analyzer = MarketStructureAnalyzer()
         self.scorer             = ConfluenceScorer()
         self.ti                 = TechnicalIndicators()
 
+        # Apply pair-specific thresholds
+        if pair_config:
+            self.MINIMUM_CONFLUENCE_SCORE = pair_config.min_confluence
+            self.MINIMUM_RR = pair_config.min_rr
+            self.MINIMUM_ADX = pair_config.min_adx
+
     def analyze(self, df: pd.DataFrame,
                 session_active: bool = True,
-                atr_multiplier_sl: float = 2.0,
-                rr_target: float = 2.0) -> Optional[TradeSetup]:
+                atr_multiplier_sl: float = None,
+                rr_target: float = None) -> Optional[TradeSetup]:
         """
         Full analysis pipeline → TradeSetup or None.
 
@@ -568,12 +589,30 @@ class ChastiefollAgent:
         
         Primary signal: PSAR flip + EMA 20/50 alignment + ADX trending
         Confirmation: Market structure, RSI, MACD, OB, FVG, session
+
+        Args:
+            df: OHLCV DataFrame
+            session_active: Whether current session allows trading
+                           (auto-set to True if pair_config.use_session_filter is False)
+            atr_multiplier_sl: Override ATR SL multiplier (default: from pair_config)
+            rr_target: Override R:R target (default: from pair_config)
         """
+        # Use pair config defaults if not explicitly overridden
+        if atr_multiplier_sl is None:
+            atr_multiplier_sl = self.pair_config.atr_sl_multiplier
+        if rr_target is None:
+            rr_target = self.pair_config.rr_target
+
+        # If pair doesn't use session filter, always allow
+        if not self.pair_config.use_session_filter:
+            session_active = True
+
         if len(df) < 50:
             return None
 
         df = df.copy().reset_index(drop=True)
-        structure = self.structure_analyzer.detect_structure(df)
+        structure = self.structure_analyzer.detect_structure(df,
+            fvg_min_size=self.pair_config.fvg_threshold(df["close"].iloc[-1]))
         close     = df["close"].iloc[-1]
         atr_val   = self.ti.atr(df["high"], df["low"], df["close"]).iloc[-1]
 
@@ -661,6 +700,8 @@ class ChastiefollAgent:
             confidence=round(conf_score / 100, 2),
             confluence=len(reasons),
             reasons=reasons,
+            timeframe="H1",
+            symbol=self.pair_config.symbol,
         )
 
 
