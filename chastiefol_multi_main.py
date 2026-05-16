@@ -96,8 +96,8 @@ class MultiPairConfig:
         self.fix_target_comp_id = os.getenv("FIX_TARGET_COMP_ID", "cServer")
         self.fix_password = os.getenv("FIX_PASSWORD", os.getenv("CTRADER_PASSWORD", ""))
 
-        # Data Feed
-        self.twelvedata_api_key = os.getenv("TWELVEDATA_API_KEY", "")
+        # Data Feed — GoldAPI only (FIX provides live price fallback)
+        self.goldapi_api_key = os.getenv("GOLDAPI_API_KEY", "")
 
         # Telegram
         self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -188,19 +188,19 @@ class ChastiefollMultiMain:
                 log.warning("⚠ No FIX_PASSWORD set — paper mode")
             log.info("✓ Paper mode active")
 
-        # 3. Data Feeds (TwelveData for historical candles)
-        if self.config.twelvedata_api_key:
+        # 3. Data Feeds (GoldAPI only — FIX provides live price fallback)
+        if self.config.goldapi_api_key:
             for symbol in self.config.pairs:
                 feed_symbol = symbol[:3] + "/" + symbol[3:]  # XAUUSD → XAU/USD
                 feed_config = DataFeedConfig(
-                    twelvedata_api_key=self.config.twelvedata_api_key,
+                    goldapi_api_key=self.config.goldapi_api_key,
                     symbol=feed_symbol,
                     default_timeframe=Timeframe.H1,
                 )
                 feed = DataFeedManager(feed_config)
                 await feed.initialize()
                 self.data_feeds[symbol] = feed
-                log.info(f"✓ DataFeed: TwelveData → {feed_symbol}")
+                log.info(f"✓ DataFeed: GoldAPI → {feed_symbol}")
 
         # 4. Multi-Pair Runner (portfolio orchestrator)
         self.runner = create_default_runner(
@@ -265,10 +265,10 @@ class ChastiefollMultiMain:
         # Fetch latest candle for each pair and feed to runner
         for symbol in self.config.pairs:
             feed = self.data_feeds.get(symbol)
+            df = None
             if feed:
                 df = await feed.get_ohlcv(timeframe=Timeframe.H1, bars=5)
                 if df is not None and not df.empty:
-                    # Feed the latest candle
                     latest = df.iloc[-1]
                     candle = {
                         "open": float(latest.get("open", 0)),
@@ -279,6 +279,29 @@ class ChastiefollMultiMain:
                         "timestamp": str(latest.get("timestamp", "")),
                     }
                     self.runner.feed_candle(symbol, candle)
+
+            # Fallback: if no data feed or feed failed, use FIX live quote
+            if not df or df.empty:
+                quote = self.fix_connector.get_latest_quote(symbol) if self.fix_connector else None
+                if quote:
+                    bid = quote.get("bid", "")
+                    ask = quote.get("ask", "")
+                    if bid and ask:
+                        mid_price = (float(bid) + float(ask)) / 2
+                    elif ask:
+                        mid_price = float(ask)
+                    elif bid:
+                        mid_price = float(bid)
+                    else:
+                        mid_price = None
+                    if mid_price:
+                        candle = {
+                            "open": mid_price, "high": mid_price,
+                            "low": mid_price, "close": mid_price,
+                            "volume": 0, "timestamp": now.isoformat(),
+                        }
+                        self.runner.feed_candle(symbol, candle)
+                        log.info(f"  [FIX fallback] {symbol} = ${mid_price:.2f}")
 
         # Run analysis cycle
         await self.runner._analysis_cycle()
