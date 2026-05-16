@@ -291,30 +291,36 @@ class ChastiefollMultiMain:
     # Signal Execution
     # ──────────────────────────────────────────
 
-    async def _on_signal(self, decision: SignalDecision):
-        """Called when MultiPairRunner approves/rejects a signal."""
+    def _on_signal(self, decision: SignalDecision):
+        """Called when MultiPairRunner approves/rejects a signal (sync wrapper)."""
         if decision.approved:
             log.info(f"✓ SIGNAL APPROVED: {decision.setup.signal.value} {decision.symbol} "
                      f"@ ${decision.setup.entry:.2f} | Lot: {decision.lot_size}")
-
-            # Execute via shared FIX Trade connection
-            await self._execute_trade(decision)
-
-            # Notify Telegram
-            if self.telegram:
-                await self.telegram.send_signal_alert(
-                    action=decision.setup.signal.value,
-                    symbol=decision.symbol,
-                    entry=decision.setup.entry,
-                    stop_loss=decision.setup.stop_loss,
-                    take_profit=decision.setup.take_profit,
-                    confidence=decision.setup.confidence,
-                    rr_ratio=decision.setup.rr_ratio,
-                    lot_size=decision.lot_size,
-                    reasons=decision.setup.reasons,
-                )
+            # Schedule async execution
+            asyncio.create_task(self._execute_signal(decision))
         else:
             log.info(f"✗ Signal rejected: {decision.symbol} — {decision.rejection_reason}")
+
+    async def _execute_signal(self, decision: SignalDecision):
+        """Async signal handler: execute trade + send Telegram."""
+        log.info(f"→ Executing {decision.symbol} {decision.setup.signal.value}")
+
+        # Execute via shared FIX Trade connection
+        await self._execute_trade(decision)
+
+        # Notify Telegram
+        if self.telegram:
+            await self.telegram.send_signal_alert(
+                action=decision.setup.signal.value,
+                symbol=decision.symbol,
+                entry=decision.setup.entry,
+                stop_loss=decision.setup.stop_loss,
+                take_profit=decision.setup.take_profit,
+                confidence=decision.setup.confidence,
+                rr_ratio=decision.setup.rr_ratio,
+                lot_size=decision.lot_size,
+                reasons=decision.setup.reasons,
+            )
 
     async def _execute_trade(self, decision: SignalDecision):
         """Execute trade via shared FIX Trade connection."""
