@@ -41,7 +41,7 @@ import asyncio
 import logging
 import time
 from enum import Enum
-from typing import Any, Awaitable, Callable, Optional, Tuple, Type
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Type
 
 log = logging.getLogger("Common.CircuitBreaker")
 
@@ -111,7 +111,7 @@ class CircuitBreaker:
     def failure_count(self) -> int:
         return self._failure_count
 
-    def stats(self) -> dict:
+    def stats(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "state": self._state.value,

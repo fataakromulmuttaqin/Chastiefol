@@ -30,7 +30,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
 class HealthStatus(str, Enum):
@@ -40,7 +40,7 @@ class HealthStatus(str, Enum):
     UNKNOWN = "unknown"      # never reported
 
     @classmethod
-    def worst(cls, statuses) -> "HealthStatus":
+    def worst(cls, statuses: Iterable["HealthStatus"]) -> "HealthStatus":
         """Aggregate: a system is only as healthy as its weakest link."""
         order = [cls.HEALTHY, cls.UNKNOWN, cls.DEGRADED, cls.UNHEALTHY]
         worst = cls.HEALTHY
@@ -57,9 +57,9 @@ class ComponentHealth:
     status: HealthStatus = HealthStatus.UNKNOWN
     detail: str = ""
     updated_at: float = field(default_factory=time.time)
-    extra: Dict = field(default_factory=dict)
+    extra: Dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
         age = time.time() - self.updated_at
         return {
             "name": self.name,
@@ -90,7 +90,7 @@ class HealthRegistry:
         name: str,
         status: HealthStatus,
         detail: str = "",
-        **extra,
+        **extra: Any,
     ) -> None:
         """Update a component's health snapshot."""
         self._components[name] = ComponentHealth(
@@ -116,9 +116,9 @@ class HealthRegistry:
                 statuses.append(c.status)
         return HealthStatus.worst(statuses)
 
-    def snapshot(self) -> Dict:
+    def snapshot(self) -> Dict[str, Any]:
         """Full /health payload."""
-        components = []
+        components: List[Dict[str, Any]] = []
         now = time.time()
         for c in self._components.values():
             entry = c.to_dict()
