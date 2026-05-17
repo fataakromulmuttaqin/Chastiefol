@@ -542,12 +542,15 @@ class ChastiefollCrypto:
         if self.llm_agent and self._llm_enabled:
             try:
                 insight = await self._llm_review_signal(signal_info, setup, position)
-                if not insight:
+                if insight is None:
+                    # None = auto-approved (LLM unavailable/timeout)
                     llm_reason = "auto-approved (LLM unavailable)"
                 elif insight.trade_recommendation.upper() == "HOLD":
+                    # HOLD = rejected
                     log.info(f"    ✗ LLM rejected signal for {symbol} — skipping execution")
                     return False
                 else:
+                    # Approved — store the reason
                     llm_reason = insight.summary if insight.summary else "AI approved"
             except Exception as e:
                 log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
@@ -712,7 +715,7 @@ class ChastiefollCrypto:
     # Learning & Memory (Auto-lesson generation)
     # ──────────────────────────────────────────
 
-    async def _llm_review_signal(self, signal_info: Dict, setup, position) -> bool:
+    async def _llm_review_signal(self, signal_info: Dict, setup, position) -> Optional["MarketInsight"]:
         """
         Ask the LLM to review a signal BEFORE execution.
         The LLM checks against lessons, patterns, and risk rules.
@@ -720,7 +723,7 @@ class ChastiefollCrypto:
         Returns True if signal is approved, False if rejected.
         """
         if not self.llm_agent:
-            return True  # No LLM = auto-approve
+            return None  # No LLM = auto-approve (caller handles None as auto-approve)
 
         symbol = signal_info["symbol"]
         
@@ -760,10 +763,10 @@ class ChastiefollCrypto:
             )
         except asyncio.TimeoutError:
             log.warning(f"    ⚠ LLM review timed out for {symbol} — auto-approving")
-            return True
+            return None
 
         if not insight:
-            return True  # Failed to get insight = auto-approve
+            return None  # Failed to get insight = auto-approve (caller handles None)
 
         # Check LLM recommendation
         recommendation = insight.trade_recommendation.upper()
