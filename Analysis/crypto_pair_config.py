@@ -217,6 +217,13 @@ MID_CAP_PAIRS = {
         atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
         avg_daily_range_pct=4.5, max_position_pct=5.0,
     ),
+    # NOTE: MATIC migrated to POL on Binance. Use POL/USDT instead.
+    "POL/USDT": CryptoPairConfig(
+        symbol="POL/USDT", base_asset="POL", category=CryptoCategory.LAYER2,
+        min_order_amount=1.0, amount_precision=1, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
+        avg_daily_range_pct=4.5, max_position_pct=5.0,
+    ),
     "UNI/USDT": CryptoPairConfig(
         symbol="UNI/USDT", base_asset="UNI", category=CryptoCategory.DEFI,
         min_order_amount=0.01, amount_precision=2, price_precision=3,
@@ -343,6 +350,13 @@ MID_CAP_PAIRS = {
         atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
         avg_daily_range_pct=5.5, max_position_pct=4.0,
     ),
+    # NOTE: FTM migrated to S (Sonic) on Binance. Use S/USDT instead.
+    "S/USDT": CryptoPairConfig(
+        symbol="S/USDT", base_asset="S", category=CryptoCategory.INFRASTRUCTURE,
+        min_order_amount=1.0, amount_precision=0, price_precision=4,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.05, price_decimals=4,
+        avg_daily_range_pct=5.5, max_position_pct=4.0,
+    ),
     "GRT/USDT": CryptoPairConfig(
         symbol="GRT/USDT", base_asset="GRT", category=CryptoCategory.INFRASTRUCTURE,
         min_order_amount=1.0, amount_precision=0, price_precision=4,
@@ -379,6 +393,13 @@ DEFI_PAIRS = {
     "MKR/USDT": CryptoPairConfig(
         symbol="MKR/USDT", base_asset="MKR", category=CryptoCategory.DEFI,
         min_order_amount=0.0001, amount_precision=4, price_precision=1,
+        atr_sl_multiplier=2.5, min_fvg_pct=0.04, price_decimals=1,
+        avg_daily_range_pct=4.5, max_position_pct=4.0,
+    ),
+    # NOTE: MKR rebranded to SKY on some exchanges. Use SKY/USDT if available.
+    "SKY/USDT": CryptoPairConfig(
+        symbol="SKY/USDT", base_asset="SKY", category=CryptoCategory.DEFI,
+        min_order_amount=0.001, amount_precision=3, price_precision=1,
         atr_sl_multiplier=2.5, min_fvg_pct=0.04, price_decimals=1,
         avg_daily_range_pct=4.5, max_position_pct=4.0,
     ),
@@ -458,6 +479,7 @@ AI_PAIRS = {
         price_decimals=4, avg_daily_range_pct=7.0, max_position_pct=3.0,
         is_volatile=True,
     ),
+    # NOTE: AGIX merged into FET (ASI alliance). Use FET/USDT instead.
     "WLD/USDT": CryptoPairConfig(
         symbol="WLD/USDT", base_asset="WLD", category=CryptoCategory.AI,
         min_order_amount=0.1, amount_precision=1, price_precision=3,
@@ -752,12 +774,7 @@ ADDITIONAL_SPOT_FUTURES_PAIRS = {
         atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=4,
         avg_daily_range_pct=6.0, max_position_pct=4.0,
     ),
-    "OMNI/USDT": CryptoPairConfig(
-        symbol="OMNI/USDT", base_asset="OMNI", category=CryptoCategory.INFRASTRUCTURE,
-        min_order_amount=0.01, amount_precision=2, price_precision=2,
-        atr_sl_multiplier=2.5, min_fvg_pct=0.06, price_decimals=2,
-        avg_daily_range_pct=6.5, max_position_pct=4.0,
-    ),
+    # NOTE: OMNI/USDT delisted from Binance — removed from watchlist.
     "POL/USDT": CryptoPairConfig(
         symbol="POL/USDT", base_asset="POL", category=CryptoCategory.LAYER2,
         min_order_amount=1.0, amount_precision=1, price_precision=4,
@@ -962,7 +979,7 @@ def get_watchlist(tier: str = "top20") -> List[str]:
     elif tier == "top20":
         return ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
                 "ADA/USDT", "DOT/USDT", "AVAX/USDT", "LINK/USDT", "DOGE/USDT",
-                "MATIC/USDT", "UNI/USDT", "ATOM/USDT", "LTC/USDT", "ARB/USDT",
+                "POL/USDT", "UNI/USDT", "ATOM/USDT", "LTC/USDT", "ARB/USDT",
                 "OP/USDT", "NEAR/USDT", "INJ/USDT", "SUI/USDT", "APT/USDT"]
     elif tier == "gold":
         return ["PAXG/USDT", "XAUT/USDT"]

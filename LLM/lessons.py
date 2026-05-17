@@ -162,7 +162,20 @@ class LessonsManager:
             return []
 
     def save_lessons(self, lessons: List[Dict]):
-        """Save lessons to file."""
+        """Save lessons to file. Enforces max size limit."""
+        # Enforce max lessons cap — prune lowest-confidence entries
+        max_lessons = 200
+        if len(lessons) > max_lessons:
+            # Sort by confidence desc, then by recency (id desc)
+            lessons.sort(
+                key=lambda x: (x.get("confidence", 0.5), x.get("id", 0)),
+                reverse=True,
+            )
+            pruned_count = len(lessons) - max_lessons
+            lessons = lessons[:max_lessons]
+            log.info(f"[Lessons] Pruned {pruned_count} low-confidence lessons "
+                     f"(cap: {max_lessons})")
+
         self._lessons_file.write_text(
             json.dumps(lessons, indent=2, ensure_ascii=False),
             encoding="utf-8"
@@ -333,6 +346,7 @@ class LessonsManager:
         """
         Record a closed trade for performance analysis.
         Also auto-generates lessons from trade outcomes.
+        Triggers deduplication every 10 trades to keep file clean.
         """
         records = self.load_performance()
         record_dict = asdict(trade) if hasattr(trade, '__dataclass_fields__') else trade.__dict__
@@ -346,6 +360,11 @@ class LessonsManager:
         
         # Auto-generate lessons from this trade
         self._auto_learn_from_trade(trade)
+        
+        # Periodic deduplication — every 10 trades
+        if len(records) % 10 == 0:
+            self.deduplicate_lessons()
+            self.remove_weak_lessons(min_confidence=0.3)
         
         log.info(f"[Perf] Trade recorded: {trade.symbol} {trade.direction} "
                  f"P&L: ${trade.pnl_usd:+,.2f} ({trade.close_reason})")
@@ -611,13 +630,53 @@ Respond with a JSON array of new lessons:
     @staticmethod
     def _is_similar(text1: str, text2: str, threshold: float = 0.7) -> bool:
         """Check if two lesson texts are similar enough to be duplicates."""
-        # Simple word overlap check
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
+        # Simple word overlap check (case-insensitive, ignoring short words)
+        words1 = set(w for w in text1.lower().split() if len(w) > 3)
+        words2 = set(w for w in text2.lower().split() if len(w) > 3)
         if not words1 or not words2:
             return False
         overlap = len(words1 & words2) / max(len(words1), len(words2))
         return overlap >= threshold
+
+    def deduplicate_lessons(self) -> int:
+        """
+        Remove near-duplicate lessons from storage.
+        Keeps the highest-confidence version of each similar lesson group.
+        
+        Call periodically (e.g., after every 10 trades or daily).
+        
+        Returns:
+            Number of duplicate lessons removed.
+        """
+        lessons = self.load_lessons()
+        if len(lessons) < 2:
+            return 0
+
+        # Sort by confidence desc so we keep the best version
+        lessons.sort(key=lambda x: x.get("confidence", 0.5), reverse=True)
+
+        unique = []
+        removed = 0
+        for lesson in lessons:
+            is_dup = False
+            for kept in unique:
+                if self._is_similar(lesson.get("lesson", ""), kept.get("lesson", "")):
+                    # Merge validation counts into the kept lesson
+                    kept["times_validated"] = (
+                        kept.get("times_validated", 0) + lesson.get("times_validated", 0)
+                    )
+                    is_dup = True
+                    removed += 1
+                    break
+            if not is_dup:
+                unique.append(lesson)
+
+        if removed > 0:
+            self.save_lessons(unique)
+            log.info(f"[Lessons] Deduplicated: removed {removed} near-duplicate lessons "
+                     f"({len(lessons)} → {len(unique)})")
+
+        return removed
 
     def get_stats(self) -> Dict:
         """Get lessons system statistics."""

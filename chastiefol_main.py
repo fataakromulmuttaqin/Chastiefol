@@ -87,6 +87,7 @@ class IntegratedConfig:
     atr_sl_mult: float = 1.5
     rr_target: float = 2.0
     min_confidence: float = 0.55
+    min_llm_confidence: float = 0.65  # Minimum LLM AI confidence to approve a trade
 
     # Risk
     max_daily_loss_pct: float = 3.0
@@ -138,6 +139,7 @@ class IntegratedConfig:
             risk_pct=float(os.getenv("RISK_PCT", "1.0")),
             max_risk_pct=float(os.getenv("MAX_RISK_PCT", "2.0")),
             min_confidence=float(os.getenv("MIN_CONFIDENCE", "0.55")),
+            min_llm_confidence=float(os.getenv("MIN_LLM_CONFIDENCE", "0.65")),
             max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "3.0")),
             max_drawdown_pct=float(os.getenv("MAX_DRAWDOWN_PCT", "10.0")),
             max_open_trades=int(os.getenv("MAX_OPEN_TRADES", "2")),
@@ -463,9 +465,12 @@ class ChastiefollIntegrated:
             return
 
         # ── Deduplication: skip if we just executed the exact same signal ──
+        # Round prices to nearest 0.50 before hashing to absorb floating-point noise
+        # (e.g. TradingView sending 2365.47 vs 2365.50 for the same alert)
         import hashlib
+        _round_dedup = lambda p: f"{round(p * 2) / 2:.1f}"
         sig_hash = hashlib.md5(
-            f"{side.value}{current_price:.2f}{stop_loss:.2f}{take_profit:.2f}".encode()
+            f"{side.value}|{_round_dedup(current_price)}|{_round_dedup(stop_loss)}|{_round_dedup(take_profit)}".encode()
         ).hexdigest()[:12]
         now_monotonic = asyncio.get_event_loop().time()
         if sig_hash == self._last_signal_hash and (now_monotonic - self._last_signal_time) < self._dedupe_window_sec:
@@ -637,9 +642,11 @@ class ChastiefollIntegrated:
             return
 
         # ── Deduplication: skip if same signal executed within window ──
+        # Round prices to nearest 0.50 before hashing to absorb floating-point noise
         import hashlib
+        _round_dedup = lambda p: f"{round(p * 2) / 2:.1f}"
         sig_hash = hashlib.md5(
-            f"{setup.signal.value}{setup.entry:.2f}{setup.stop_loss:.2f}{setup.take_profit:.2f}".encode()
+            f"{setup.signal.value}|{_round_dedup(setup.entry)}|{_round_dedup(setup.stop_loss)}|{_round_dedup(setup.take_profit)}".encode()
         ).hexdigest()[:12]
         now_monotonic = asyncio.get_event_loop().time()
         if sig_hash == self._last_signal_hash and (now_monotonic - self._last_signal_time) < self._dedupe_window_sec:
@@ -779,6 +786,29 @@ class ChastiefollIntegrated:
                 )
             return insight  # Caller checks .trade_recommendation == "HOLD"
 
+        # ── LLM CONFIDENCE THRESHOLD ──
+        # Even if LLM recommends BUY/SELL, reject if its own confidence is too low.
+        # This prevents borderline approvals (e.g. 57%) from reaching execution.
+        min_llm_conf = self.config.min_llm_confidence
+        if insight.confidence < min_llm_conf:
+            log.info(
+                f"    🧠 LLM confidence too low: {insight.confidence*100:.0f}% "
+                f"< {min_llm_conf*100:.0f}% threshold — treating as HOLD"
+            )
+            insight.trade_recommendation = "HOLD"
+            if self.lessons:
+                self.lessons.add_lesson(
+                    lesson=f"LLM approved {setup.signal.value} {symbol} but with low confidence "
+                           f"({insight.confidence*100:.0f}% < {min_llm_conf*100:.0f}% min). "
+                           f"Borderline signals should be skipped.",
+                    role="SCREENER",
+                    source="agent",
+                    context=f"Low AI confidence rejection",
+                    symbol=symbol,
+                    confidence=0.7,
+                )
+            return insight
+
         log.info(f"    🧠 LLM APPROVED: {symbol} {setup.signal.value} | "
                  f"AI Confidence: {insight.confidence*100:.0f}%")
         return insight  # Approved — return insight so caller has full details
@@ -799,28 +829,52 @@ class ChastiefollIntegrated:
         """Execute order via configured method (MCP, FIX, or Paper).
         
         Includes price sanity check: if the entry price deviates more than 1%
-        from the live FIX price, the order is rejected to prevent executing
+        from the live price, the order is rejected to prevent executing
         at stale/synthetic prices.
+        
+        Price validation priority:
+          1. FIX price connection (synchronous, fastest)
+          2. Async _get_current_price() fallback (MCP, DataFeed providers)
+          3. If no price available in live mode → reject order
         """
         # ── PRICE SANITY CHECK ──
-        # Validate entry against live FIX price to catch stale/synthetic data
+        # Validate entry against live price to catch stale/synthetic data.
+        # Try FIX first (sync), then fallback to async multi-source.
         live_price = self._get_fix_price()
+        if live_price <= 0:
+            # FIX price unavailable — fallback to async price sources
+            live_price = await self._get_current_price()
+
         if live_price > 0 and entry > 0:
             deviation = abs(entry - live_price) / live_price
             if deviation > 0.01:  # > 1% deviation
                 log.error(
-                    f"PRICE SANITY FAILED: entry=${entry:.2f} vs FIX live=${live_price:.2f} "
+                    f"PRICE SANITY FAILED: entry=${entry:.2f} vs live=${live_price:.2f} "
                     f"(deviation={deviation*100:.1f}% > 1% threshold). "
                     f"Order REJECTED to prevent bad fill."
                 )
                 await self._notify_error(
                     f"Order rejected — price mismatch!\n"
                     f"Signal entry: ${entry:.2f}\n"
-                    f"Live FIX price: ${live_price:.2f}\n"
+                    f"Live price: ${live_price:.2f}\n"
                     f"Deviation: {deviation*100:.1f}%\n"
                     f"Threshold: 1%", context=f"{side.value} {volume} lots"
                 )
                 return False
+        elif live_price <= 0 and entry > 0 and not self.config.paper_mode:
+            # No live price available at all in live mode — too risky to execute
+            log.error(
+                f"PRICE SANITY FAILED: No live price available to validate "
+                f"entry=${entry:.2f}. Order REJECTED (live mode requires price validation)."
+            )
+            await self._notify_error(
+                f"Order rejected — no live price for validation!\n"
+                f"Signal entry: ${entry:.2f}\n"
+                f"All price sources returned 0.\n"
+                f"Cannot execute without price confirmation in live mode.",
+                context=f"{side.value} {volume} lots"
+            )
+            return False
 
         log.info(f"Executing: {side.value} {volume} lots @ ~{entry:.2f} "
                  f"SL={stop_loss:.2f} TP={take_profit:.2f}")
@@ -895,9 +949,34 @@ class ChastiefollIntegrated:
             )
 
         if order_result.success:
-            # Track trade locally
+            # ── VALIDATE FILL DATA before tracking ──
+            # Only add to open_trades if we have valid fill confirmation.
+            # This prevents ghost trades from partial/invalid broker responses.
             exec_price = order_result.execution_price or entry
             filled_vol = order_result.filled_volume or volume
+
+            if exec_price <= 0:
+                log.error(
+                    f"Order reported success but execution_price=0 — "
+                    f"NOT adding to open_trades (possible broker data issue)"
+                )
+                await self._notify_error(
+                    f"Order success but no fill price! Broker may have "
+                    f"acknowledged without filling. Check manually.",
+                    context=f"{side.value} {volume} lots"
+                )
+                return False
+
+            if filled_vol <= 0:
+                log.error(
+                    f"Order reported success but filled_volume=0 — "
+                    f"NOT adding to open_trades (possible broker data issue)"
+                )
+                await self._notify_error(
+                    f"Order success but no fill volume! Check broker manually.",
+                    context=f"{side.value} {volume} lots"
+                )
+                return False
 
             trade = TradeLifecycle(
                 entry_price=exec_price,
@@ -914,6 +993,11 @@ class ChastiefollIntegrated:
             broker_pos_id = order_result.position_id or order_result.order_id
             if broker_pos_id:
                 self.trade_position_ids[id(trade)] = broker_pos_id
+            else:
+                log.warning(
+                    f"No broker position ID returned — trade tracked locally "
+                    f"but broker close/modify will not work"
+                )
 
             log.info(f"✓ Order filled: {side.value} {filled_vol} lots @ "
                      f"{exec_price:.2f} "
@@ -1004,7 +1088,11 @@ class ChastiefollIntegrated:
     # ──────────────────────────────────────────
 
     async def _manage_open_trades(self, current_price: float, df):
-        """Manage open trades — trailing SL, breakeven, partial TP."""
+        """Manage open trades — trailing SL, breakeven, partial TP.
+        
+        When SL/TP is updated locally (trailing stop, breakeven move),
+        also sends modification to the broker (FIX/MCP) to keep state in sync.
+        """
         from Analysis.xauusd_engine import TechnicalIndicators
         ti = TechnicalIndicators()
         atr = ti.atr(df["high"], df["low"], df["close"]).iloc[-1]
@@ -1021,6 +1109,32 @@ class ChastiefollIntegrated:
                         update_type=action_desc.split(":")[0] if ":" in action_desc else "Update",
                         details=action_desc,
                     )
+
+            # ── BROKER SL/TP SYNC: send modification to broker when SL changes ──
+            if result["update_sl"] and not self.config.paper_mode:
+                broker_pos_id = self.trade_position_ids.get(id(trade))
+                if broker_pos_id:
+                    try:
+                        if self.ctrader_fix:
+                            self.ctrader_fix.modify_position(
+                                position_id=broker_pos_id,
+                                symbol=self.config.symbol,
+                                stop_loss=result["update_sl"],
+                                take_profit=trade.take_profit,
+                            )
+                            log.info(f"  Broker SL/TP updated: pos={broker_pos_id} "
+                                     f"SL={result['update_sl']:.2f} TP={trade.take_profit:.2f}")
+                        elif self.ctrader_mcp:
+                            await self.ctrader_mcp.modify_position(
+                                position_id=broker_pos_id,
+                                stop_loss=result["update_sl"],
+                                take_profit=trade.take_profit,
+                            )
+                            log.info(f"  Broker SL/TP updated via MCP: pos={broker_pos_id}")
+                    except Exception as e:
+                        log.warning(f"  Failed to update SL/TP on broker: {e}")
+                else:
+                    log.warning(f"  No broker position ID — SL/TP only updated locally")
 
             if result["close_all"]:
                 pnl = trade.pnl_usd
@@ -1053,14 +1167,43 @@ class ChastiefollIntegrated:
                     )
 
                 # Close on broker side
-                if self.ctrader_mcp and not self.config.paper_mode:
+                broker_close_ok = True
+                if not self.config.paper_mode:
                     broker_pos_id = self.trade_position_ids.get(id(trade))
                     if broker_pos_id:
-                        await self.ctrader_mcp.close_position(broker_pos_id)
+                        try:
+                            if self.ctrader_mcp:
+                                await self.ctrader_mcp.close_position(broker_pos_id)
+                            elif self.ctrader_fix:
+                                # FIX close: send opposite market order
+                                opposite_side = "SELL" if trade.direction == "BUY" else "BUY"
+                                close_result = await self.ctrader_fix.execute_order(
+                                    symbol=self.config.symbol,
+                                    side=opposite_side,
+                                    volume=trade.lot_size,
+                                )
+                                if not close_result.get("success"):
+                                    broker_close_ok = False
+                                    log.error(
+                                        f"  Broker close FAILED for pos={broker_pos_id}: "
+                                        f"{close_result.get('text', 'unknown error')} — "
+                                        f"keeping trade in local state"
+                                    )
+                        except Exception as e:
+                            broker_close_ok = False
+                            log.error(f"  Broker close exception: {e} — keeping in local state")
                     else:
                         log.warning(f"  No broker position ID for trade — cannot close on broker")
 
-                closed.append(trade)
+                # Only remove from local state if broker close succeeded (or paper mode)
+                if broker_close_ok:
+                    closed.append(trade)
+                else:
+                    # Revert local account changes since trade is still open
+                    self.account.balance -= pnl
+                    self.account.equity = self.account.balance
+                    if pnl < 0:
+                        self.account.daily_loss -= abs(pnl)
 
         for t in closed:
             self.open_trades.remove(t)

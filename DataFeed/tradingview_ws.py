@@ -151,12 +151,29 @@ class TradingViewWSProvider:
         for attempt in range(1, self.config.reconnect_attempts + 1):
             try:
                 import websockets
+
+                # websockets >= 14.x uses `additional_headers` instead of `extra_headers`.
+                # Older versions (< 13) use `extra_headers`.
+                # Try the modern API first, fall back to legacy if needed.
+                connect_kwargs = {
+                    "ping_interval": None,
+                    "max_size": 2**20,
+                }
+
+                # Detect which keyword the installed version accepts
+                import inspect
+                sig = inspect.signature(websockets.connect)
+                if "additional_headers" in sig.parameters:
+                    connect_kwargs["additional_headers"] = {"Origin": self.config.origin}
+                elif "extra_headers" in sig.parameters:
+                    connect_kwargs["extra_headers"] = {"Origin": self.config.origin}
+                else:
+                    # Very old version — try origin kwarg
+                    connect_kwargs["origin"] = self.config.origin
+
                 self._ws = await websockets.connect(
                     self.config.ws_url,
-                    origin=self.config.origin,
-                    extra_headers={"Origin": self.config.origin},
-                    ping_interval=None,
-                    max_size=2**20,
+                    **connect_kwargs,
                 )
                 self._connected = True
                 self._running = True

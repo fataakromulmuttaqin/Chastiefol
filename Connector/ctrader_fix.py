@@ -1051,6 +1051,28 @@ class CTraderFIXConnector:
             client_order_id, symbol, side, symbol_map=self.symbol_map,
         )
 
+    def modify_position(self, position_id: str, symbol: str,
+                        stop_loss: float = 0.0, take_profit: float = 0.0) -> str:
+        """
+        Modify an open position's SL/TP on the broker.
+        
+        Args:
+            position_id: Broker's position/order ID from fill confirmation
+            symbol: Symbol name (e.g. "XAUUSD")
+            stop_loss: New stop loss price (0 = don't change)
+            take_profit: New take profit price (0 = don't change)
+            
+        Returns:
+            Client order ID for tracking the modification request
+        """
+        return self.trade_conn.modify_position(
+            position_id=position_id,
+            symbol=symbol,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            symbol_map=self.symbol_map,
+        )
+
     def get_latest_quote(self, symbol: str) -> Optional[Dict]:
         """Get latest cached quote for a symbol."""
         return self._latest_quotes.get(symbol)
