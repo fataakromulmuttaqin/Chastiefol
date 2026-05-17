@@ -682,6 +682,75 @@ class LLMInsightAgent:
                  f"Model: {self.config.model} | "
                  f"Lessons: {'enabled' if self.lessons_manager else 'disabled'}")
 
+    # ──────────────────────────────────────────
+    # Helpers
+    # ──────────────────────────────────────────
+
+    @staticmethod
+    def _strip_thinking_tags(text: str) -> str:
+        """
+        Remove "thinking" / reasoning blocks emitted by various LLM providers.
+
+        Supports the following formats (case-insensitive, multi-line):
+          - HTML/XML style:   <think>...</think>, <thinking>...</thinking>
+          - Chinese full-width parens: （think ...） or （thinking ...）
+          - Markdown-style:   ```thinking ... ```
+
+        Also strips any leftover, unterminated opening tag (e.g. the model
+        was truncated mid-thought) so we never carry partial reasoning into
+        downstream JSON parsing.
+
+        Args:
+            text: Raw LLM response text.
+
+        Returns:
+            Text with all reasoning blocks removed and surrounding
+            whitespace trimmed. Returns empty string if input is falsy.
+        """
+        if not text:
+            return ""
+
+        # 1) Closed HTML/XML thinking tags: <think>...</think>, <thinking>...</thinking>
+        text = re.sub(
+            r'<\s*think(?:ing)?\s*>[\s\S]*?<\s*/\s*think(?:ing)?\s*>',
+            '',
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # 2) Closed Chinese full-width-paren thinking blocks: （think ...） / （thinking ...）
+        text = re.sub(
+            r'（\s*think(?:ing)?\b[\s\S]*?）',
+            '',
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # 3) Closed markdown fenced thinking blocks: ```thinking ... ```
+        text = re.sub(
+            r'```\s*think(?:ing)?\b[\s\S]*?```',
+            '',
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # 4) Stray unterminated opening tags — drop everything from the tag
+        #    to the end of the string so we don't carry partial reasoning.
+        text = re.sub(
+            r'<\s*think(?:ing)?\s*>[\s\S]*$',
+            '',
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r'（\s*think(?:ing)?\b[\s\S]*$',
+            '',
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        return text.strip()
+
     async def initialize(self):
         """Initialize the LLM client."""
         await self.client.init()
@@ -783,9 +852,9 @@ class LLMInsightAgent:
                     return self._parse_final_answer(response)
 
                 # Strip thinking tags and try direct JSON parse
-                # Strip thinking tags — support BOTH Chinese （） and HTML 
-                clean = re.sub(r'<think>[\s\S]*?', '', response, count=0)
-                clean = re.sub(r'<think>[\s\S]*?）', '', clean, count=0)
+                # Supports HTML <think>/<thinking>, Chinese （think ...）, and
+                # markdown ```thinking ... ``` blocks (see _strip_thinking_tags).
+                clean = self._strip_thinking_tags(response)
 
                 result = self._parse_json_insight(clean)
                 if result.trade_recommendation in ("BUY", "SELL", "HOLD"):
@@ -918,12 +987,9 @@ Respond ONLY with valid JSON."""
     def _parse_json_insight(self, text: str) -> MarketInsight:
         """Parse JSON string into MarketInsight. Handles thinking tags and partial responses."""
         # ── Step 1: Strip thinking tags ──
-        # Remove thinking tags and their content (multi-line)
-# Support both Chinese-style （） and HTML-style 
-        # Use count=0 to strip ALL occurrences (not just first)
-        text = re.sub(r'<think>[\s\S]*?', '', text, count=0)
-        text = re.sub(r'<think>[\s\S]*?）', '', text, count=0)
-        text = text.strip()
+        # Supports HTML <think>/<thinking>, Chinese （think ...）, and markdown
+        # ```thinking ... ``` blocks. See _strip_thinking_tags for full grammar.
+        text = self._strip_thinking_tags(text)
 
         json_str = text.strip()
 
@@ -974,12 +1040,10 @@ Respond ONLY with valid JSON."""
         Last-resort parser: extract BUY/SELL/HOLD and reasoning from raw thinking text.
         Used when LLM doesn't output proper JSON.
         """
-        text_lower = text.lower()
-
         # Remove thinking tags first
-        # Remove thinking tags — support BOTH Chinese （） and HTML 
-        clean = re.sub(r'<think>[\s\S]*?', '', text, count=0)
-        clean = re.sub(r'<think>[\s\S]*?）', '', clean, count=0)
+        # Supports HTML <think>/<thinking>, Chinese （think ...）, and markdown
+        # ```thinking ... ``` blocks. See _strip_thinking_tags for full grammar.
+        clean = self._strip_thinking_tags(text)
         text_lower = clean.lower()
 
         # Find recommendation - look in the clean text
