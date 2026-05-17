@@ -236,7 +236,13 @@ class BinanceWebSocket:
     async def start(self):
         """Start the WebSocket connection and begin receiving data."""
         self._running = True
-        self._session = aiohttp.ClientSession()
+        # Bound the session so the initial WebSocket handshake (which goes
+        # through HTTP Upgrade) can't hang indefinitely on a network
+        # blackhole. The actual streaming connection is governed by
+        # heartbeat / ping_timeout in ws_connect.
+        self._session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=None)
+        )
 
         while self._running:
             try:

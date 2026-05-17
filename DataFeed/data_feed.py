@@ -37,6 +37,8 @@ from .tradingview_ws import (
     TVBar,
 )
 
+from Common.health import HealthStatus, default_registry
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
@@ -165,6 +167,11 @@ class DataFeedManager:
         self._initialized = False
         self._on_tick_callbacks: List[Callable] = []
 
+        # Health reporting — surfaced via /health so operators can see
+        # whether the live feed is dead and we're trading on stale data.
+        self._health = default_registry()
+        self._health.register("datafeed")
+
         log.info(f"DataFeedManager initialized | "
                  f"Symbol: {self.config.symbol} | "
                  f"Provider: TradingView WS (FREE) | "
@@ -263,6 +270,9 @@ class DataFeedManager:
                 )
                 self._quote_cache = quote
                 self._quote_cache_time = time.time()
+                self._health.report(
+                    "datafeed", HealthStatus.HEALTHY, detail="TradingView WS live",
+                )
                 return quote
 
         # CCXT fallback (PAXG/USDT as gold proxy)
@@ -281,11 +291,44 @@ class DataFeedManager:
                     )
                     self._quote_cache = quote
                     self._quote_cache_time = time.time()
+                    # Live, but on the proxy — that's a degraded mode.
+                    self._health.report(
+                        "datafeed",
+                        HealthStatus.DEGRADED,
+                        detail="primary down, using CCXT PAXG/USDT proxy",
+                    )
                     return quote
-            except Exception:
-                pass
+            except Exception as e:
+                # CCXT fallback failed — log so operators can spot rate-limits
+                # or auth issues. We still fall through to stale cache below
+                # so the trading loop doesn't crash, but the failure must be
+                # visible (silently returning stale price masks broken feeds).
+                log.warning(
+                    "[DataFeed] CCXT fallback quote failed (%s): %s",
+                    type(e).__name__,
+                    e,
+                )
 
-        return self._quote_cache  # Return stale cache if available
+        # Final fallback: stale cache. Warn so it's clear no fresh source worked.
+        if self._quote_cache is not None:
+            age = time.time() - self._quote_cache_time
+            log.warning(
+                "[DataFeed] All providers failed — returning stale quote (age=%.1fs)",
+                age,
+            )
+            self._health.report(
+                "datafeed",
+                HealthStatus.UNHEALTHY,
+                detail=f"all providers down; serving stale cache (age={age:.1f}s)",
+                stale_age_seconds=round(age, 1),
+            )
+        else:
+            self._health.report(
+                "datafeed",
+                HealthStatus.UNHEALTHY,
+                detail="all providers down; no cached quote",
+            )
+        return self._quote_cache
 
     async def get_ohlcv(
         self,
@@ -383,8 +426,15 @@ class DataFeedManager:
         for cb in self._on_tick_callbacks:
             try:
                 cb(tick)
-            except Exception:
-                pass
+            except Exception as e:
+                # Don't let one misbehaving callback break the tick loop, but
+                # surface it so silent regressions are obvious in logs.
+                log.exception(
+                    "[DataFeed] Tick callback %r raised %s: %s",
+                    getattr(cb, "__qualname__", cb),
+                    type(e).__name__,
+                    e,
+                )
 
     def _get_ohlcv_cache(self, key: str) -> Optional[pd.DataFrame]:
         """Get cached OHLCV if not expired."""
