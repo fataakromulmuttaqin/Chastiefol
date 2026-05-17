@@ -230,6 +230,12 @@ class ChastiefollIntegrated:
         self._scan_task: Optional[asyncio.Task] = None
         self._webhook_consumer_task: Optional[asyncio.Task] = None
 
+        # ── Deduplication: prevent same signal from executing multiple times ──
+        # Tracks last signal hash (action+entry+sl+tp) and timestamp
+        self._last_signal_hash: Optional[int] = None
+        self._last_signal_time: float = 0.0  # monotonic clock of last execution
+        self._dedupe_window_sec: float = 120.0  # ignore duplicates within 2 minutes
+
         # ── LLM Review Agent (validates signals before execution) ──
         self.lessons = LessonsManager()
         self.trading_memory = TradingMemory(self.lessons)
@@ -422,22 +428,15 @@ class ChastiefollIntegrated:
         """Process a validated webhook signal through risk checks and execution."""
         log.info(f"Processing webhook signal: {signal.action.value}")
 
-        # Risk check
-        self.account.open_trades = len(self.open_trades)
-        status = self.drawdown_guard.check(self.account)
-        if not status["trading_allowed"]:
-            log.warning(f"Trading blocked by risk guard: {status['reason']}")
-            await self._notify_warning(f"Signal rejected — {status['reason']}")
-            return
-
+        # ── Early exits ──
         if signal.action == TradeAction.CLOSE:
             await self._close_all_positions()
             return
 
-        # Convert signal to order
+        # Determine side first (needed for deduplication hash)
         side = OrderSide.BUY if signal.action == TradeAction.BUY else OrderSide.SELL
 
-        # Get current price for SL/TP calculation
+        # Get current price
         current_price = await self._get_current_price()
         if current_price == 0:
             log.error("Cannot get current price — aborting signal")
@@ -452,6 +451,34 @@ class ChastiefollIntegrated:
         else:
             stop_loss = current_price + (signal.sl_pips * pip_value)
             take_profit = current_price - (signal.tp_pips * pip_value)
+
+        # ── Risk check (needs account.open_trades) ──
+        self.account.open_trades = len(self.open_trades)
+        status = self.drawdown_guard.check(self.account)
+        if not status["trading_allowed"]:
+            log.warning(f"Trading blocked by risk guard: {status['reason']}")
+            await self._notify_warning(f"Signal rejected — {status['reason']}")
+            return
+
+        # ── Deduplication: skip if we just executed the exact same signal ──
+        import hashlib
+        sig_hash = hashlib.md5(
+            f"{side.value}{current_price:.2f}{stop_loss:.2f}{take_profit:.2f}".encode()
+        ).hexdigest()[:12]
+        now_monotonic = asyncio.get_event_loop().time()
+        if sig_hash == self._last_signal_hash and (now_monotonic - self._last_signal_time) < self._dedupe_window_sec:
+            log.info(f"    ⏳ Duplicate signal suppressed ({self._dedupe_window_sec}s window)")
+            return
+        self._last_signal_hash = sig_hash
+        self._last_signal_time = now_monotonic
+
+        # ── Session filter: reject signals outside trading hours ──
+        now_utc = datetime.now(timezone.utc)
+        session_active, session_name = self.session_filter.is_active(now_utc.hour, now_utc.minute)
+        if not session_active:
+            log.info(f"    ⏳ Webhook signal skipped — {session_name} (off-session)")
+            await self._notify_warning(f"Signal blocked — off-session ({session_name})")
+            return
 
         # Calculate position size from risk
         pos_spec = self.position_sizer.calculate(self.account, current_price, stop_loss)
@@ -535,6 +562,11 @@ class ChastiefollIntegrated:
             current_price = float(df["close"].iloc[-1])
             await self._manage_open_trades(current_price, df)
 
+# Session filter — skip if off-session
+        if not active:
+            log.info(f"    ⏳ No signal — {sess_name} (off-session)")
+            return
+
         # Risk check
         self.account.open_trades = len(self.open_trades)
         status = self.drawdown_guard.check(self.account)
@@ -596,6 +628,18 @@ class ChastiefollIntegrated:
             )
             return
 
+        # ── Deduplication: skip if same signal executed within window ──
+        import hashlib
+        sig_hash = hashlib.md5(
+            f"{setup.signal.value}{setup.entry:.2f}{setup.stop_loss:.2f}{setup.take_profit:.2f}".encode()
+        ).hexdigest()[:12]
+        now_monotonic = asyncio.get_event_loop().time()
+        if sig_hash == self._last_signal_hash and (now_monotonic - self._last_signal_time) < self._dedupe_window_sec:
+            log.info(f"    ⏳ Duplicate signal suppressed ({self._dedupe_window_sec}s window)")
+            return
+        self._last_signal_hash = sig_hash
+        self._last_signal_time = now_monotonic
+
         # Position size
         pos_spec = self.position_sizer.calculate(
             self.account, setup.entry, setup.stop_loss
@@ -611,8 +655,30 @@ class ChastiefollIntegrated:
         log.info(f"  R:R: {setup.rr_ratio} | Lots: {lot}")
         log.info(f"{'*'*50}")
 
-        # Notify signal
-        if self.telegram:
+        # ── LLM REVIEW: Ask AI to validate the signal before execution ──
+        if self.llm_agent and self._llm_enabled:
+            try:
+                llm_approved = await self._llm_review_signal(setup, lot)
+                if not llm_approved:
+                    log.info(f"    ✗ LLM rejected signal for {self.config.symbol} — skipping execution")
+                    await self._notify_warning(f"LLM rejected {setup.signal.value} signal for {self.config.symbol}")
+                    return
+            except Exception as e:
+                log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
+
+        # Execute
+        side = OrderSide.BUY if setup.signal == Signal.BUY else OrderSide.SELL
+        exec_result = await self._execute_order(
+            side=side,
+            volume=lot,
+            entry=setup.entry,
+            stop_loss=setup.stop_loss,
+            take_profit=setup.take_profit,
+            comment=f"Auto:{sess_name}",
+        )
+
+        # Only send Telegram alert on successful execution
+        if exec_result and self.telegram:
             await self.telegram.send_signal_alert(
                 action=setup.signal.value,
                 entry=setup.entry,
@@ -623,28 +689,6 @@ class ChastiefollIntegrated:
                 lot_size=lot,
                 reasons=setup.reasons,
             )
-
-        # ── LLM REVIEW: Ask AI to validate the signal before execution ──
-        if self.llm_agent and self._llm_enabled:
-            try:
-                llm_approved = await self._llm_review_signal(setup, lot)
-                if not llm_approved:
-                    log.info(f"    ✗ LLM rejected signal for {self.config.symbol} — skipping execution")
-                    await self._notify_warning(f"LLM rejected {side.value} signal for {self.config.symbol}")
-                    return
-            except Exception as e:
-                log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
-
-        # Execute
-        side = OrderSide.BUY if setup.signal == Signal.BUY else OrderSide.SELL
-        await self._execute_order(
-            side=side,
-            volume=lot,
-            entry=setup.entry,
-            stop_loss=setup.stop_loss,
-            take_profit=setup.take_profit,
-            comment=f"Auto_{setup.confidence*100:.0f}pct",
-        )
         self.signal_count += 1
 
 
@@ -768,18 +812,9 @@ class ChastiefollIntegrated:
                     f"Signal entry: ${entry:.2f}\n"
                     f"Live FIX price: ${live_price:.2f}\n"
                     f"Deviation: {deviation*100:.1f}%\n"
-                    f"Threshold: 1%",
-                    context=f"{side.value} {volume} lots"
+                    f"Threshold: 1%", context=f"{side.value} {volume} lots"
                 )
-                return
-            # Use live price instead of potentially stale entry
-            if deviation > 0.001:  # > 0.1% — use live price for better accuracy
-                log.info(f"Adjusting entry from ${entry:.2f} to live FIX price ${live_price:.2f} "
-                         f"(deviation={deviation*100:.2f}%)")
-                entry = live_price
-        elif live_price == 0 and not self.config.paper_mode:
-            # No FIX price available in live mode — warn but continue
-            log.warning("FIX price unavailable for sanity check — proceeding with caution")
+                return False
 
         log.info(f"Executing: {side.value} {volume} lots @ ~{entry:.2f} "
                  f"SL={stop_loss:.2f} TP={take_profit:.2f}")
@@ -813,18 +848,18 @@ class ChastiefollIntegrated:
             if not order_result.get("success"):
                 log.error(f"FIX order failed: {order_result.get('text')}")
                 await self._notify_error(f"FIX order failed: {order_result.get('text')}")
-                return
+                return False
 
         else:
             log.error("No execution method available!")
             await self._notify_error("No execution method configured")
-            return
+            return False
 
         # Handle result — normalize to common interface
         # OrderResult (dataclass from MCP/Paper) uses attribute access
         # FIX returns a plain dict — normalize both to attribute-style access
         if order_result is None:
-            return
+            return False
 
         # Normalize FIX dict result to OrderResult dataclass
         if isinstance(order_result, dict):
@@ -874,12 +909,14 @@ class ChastiefollIntegrated:
                     stop_loss=stop_loss,
                     take_profit=take_profit,
                 )
+            return True
         else:
             log.error(f"Order failed: {order_result.error_message}")
             await self._notify_error(
                 f"Order rejected: {order_result.error_message}",
                 context=f"{side.value} {volume} lots"
             )
+            return False
 
     def _paper_execute(
         self, side: OrderSide, volume: float, entry: float,

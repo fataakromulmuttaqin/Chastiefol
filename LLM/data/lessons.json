@@ -70,5 +70,17 @@
     "times_validated": 1,
     "times_violated": 0,
     "added_at": "2026-05-17T04:22:55.900110+00:00"
+  },
+  {
+    "id": 1778993388158,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL XAUUSD: [your structured response in JSON format]",
+    "source": "agent",
+    "context": "Rejected at confidence 80%",
+    "symbol": "XAUUSD",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T04:49:48.158534+00:00"
   }
 ]
