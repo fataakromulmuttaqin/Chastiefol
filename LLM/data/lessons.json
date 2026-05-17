@@ -66,8 +66,8 @@
     "source": "agent",
     "context": "Rejected at confidence 77%",
     "symbol": "BONK/USDT",
-    "confidence": 0.6,
-    "times_validated": 0,
+    "confidence": 0.7,
+    "times_validated": 1,
     "times_violated": 0,
     "added_at": "2026-05-17T04:22:55.900110+00:00"
   }

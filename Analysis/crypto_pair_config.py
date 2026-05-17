@@ -845,14 +845,12 @@ CRYPTO_CONFIGS: Dict[str, CryptoPairConfig] = {
     "PAXG/USDT": CryptoPairConfig(
         symbol="PAXG/USDT", base_asset="PAXG", category=CryptoCategory.COMMODITY,
         avg_daily_range_pct=1.5, max_position_pct=10.0,
-        atr_multiplier=2.0, risk_pct=2.0, min_rr=1.5,
-        position_limit=3, max_daily_trades=5,
+        atr_sl_multiplier=2.0, rr_target=2.0, min_rr=1.5,
     ),
     "XAUT/USDT": CryptoPairConfig(
         symbol="XAUT/USDT", base_asset="XAUT", category=CryptoCategory.COMMODITY,
         avg_daily_range_pct=1.2, max_position_pct=8.0,
-        atr_multiplier=2.0, risk_pct=2.0, min_rr=1.5,
-        position_limit=3, max_daily_trades=5,
+        atr_sl_multiplier=2.0, rr_target=2.0, min_rr=1.5,
     ),
     # Mid Cap
     **MID_CAP_PAIRS,
