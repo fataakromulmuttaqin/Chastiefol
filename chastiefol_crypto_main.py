@@ -542,8 +542,8 @@ class ChastiefollCrypto:
         if self.llm_agent and self._llm_enabled:
             try:
                 insight = await self._llm_review_signal(signal_info, setup, position)
-                if insight is None:
-                    # None = auto-approved (LLM unavailable/timeout)
+                if not insight:
+                    # False = auto-approved (LLM unavailable/timeout)
                     llm_reason = "auto-approved (LLM unavailable)"
                 elif insight.trade_recommendation.upper() == "HOLD":
                     # HOLD = rejected
@@ -719,11 +719,13 @@ class ChastiefollCrypto:
         """
         Ask the LLM to review a signal BEFORE execution.
         The LLM checks against lessons, patterns, and risk rules.
-        
-        Returns True if signal is approved, False if rejected.
+
+        Returns:
+          - MarketInsight object: LLM returned a decision (check .trade_recommendation)
+          - None: LLM unavailable/timeout/failed — caller should auto-approve
         """
         if not self.llm_agent:
-            return None  # No LLM = auto-approve (caller handles None as auto-approve)
+            return None  # None = auto-approve (caller handles None as auto-approve)
 
         symbol = signal_info["symbol"]
         
@@ -763,10 +765,10 @@ class ChastiefollCrypto:
             )
         except asyncio.TimeoutError:
             log.warning(f"    ⚠ LLM review timed out for {symbol} — auto-approving")
-            return None
+            return False  # False = auto-approve on timeout
 
         if not insight:
-            return None  # Failed to get insight = auto-approve (caller handles None)
+            return False  # Failed to get insight = auto-approve (caller handles False)
 
         # Check LLM recommendation
         recommendation = insight.trade_recommendation.upper()
