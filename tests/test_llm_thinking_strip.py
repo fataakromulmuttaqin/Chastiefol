@@ -29,11 +29,25 @@ if ROOT not in sys.path:
 # (`_strip_thinking_tags`) doesn't actually need it, so when aiohttp isn't
 # installed (minimal sandboxes) we provide a stub. CI installs the real
 # package via requirements.txt and this stub becomes a no-op.
+#
+# We register both `aiohttp` and `aiohttp.web` so other test modules that run
+# under the same `unittest discover` session (e.g. webhook tests) can also
+# import `from aiohttp import web`.
 if "aiohttp" not in sys.modules:
     try:  # pragma: no cover — environment-dependent
         import aiohttp  # noqa: F401
     except ImportError:
-        sys.modules["aiohttp"] = types.ModuleType("aiohttp")
+        aiohttp_stub = types.ModuleType("aiohttp")
+        aiohttp_web = types.ModuleType("aiohttp.web")
+        aiohttp_web.Application = object
+        aiohttp_web.AppRunner = object
+        aiohttp_web.TCPSite = object
+        aiohttp_web.Request = object
+        aiohttp_web.Response = object
+        aiohttp_web.json_response = lambda *a, **kw: None
+        aiohttp_stub.web = aiohttp_web
+        sys.modules["aiohttp"] = aiohttp_stub
+        sys.modules["aiohttp.web"] = aiohttp_web
 
 
 def _strip():
