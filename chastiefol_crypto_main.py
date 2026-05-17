@@ -537,15 +537,21 @@ class ChastiefollCrypto:
             })
             return True
 
-        # ── LLM REVIEW: Ask AI to validate the signal before execution ──
+# ── LLM REVIEW: Ask AI to validate the signal before execution ──
+        llm_reason = ""
         if self.llm_agent and self._llm_enabled:
             try:
-                llm_approved = await self._llm_review_signal(signal_info, setup, position)
-                if not llm_approved:
+                insight = await self._llm_review_signal(signal_info, setup, position)
+                if not insight:
+                    llm_reason = "auto-approved (LLM unavailable)"
+                elif insight.trade_recommendation.upper() == "HOLD":
                     log.info(f"    ✗ LLM rejected signal for {symbol} — skipping execution")
                     return False
+                else:
+                    llm_reason = insight.summary if insight.summary else "AI approved"
             except Exception as e:
                 log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
+                llm_reason = "auto-approved (LLM error)"
 
         # Execute order
         side = "buy" if setup.signal.value == "BUY" else "sell"
@@ -555,26 +561,14 @@ class ChastiefollCrypto:
             amount=adjusted_amount,
             stop_loss=setup.stop_loss,
             take_profit=setup.take_profit,
-            comment=f"Chast_{setup.confidence*100:.0f}pct",
+            comment=f"Ch_{setup.confidence*100:.0f}pct",
         )
 
         if order_result.success:
-            # Register with risk manager
-            category = pair_config.category.value if hasattr(pair_config.category, 'value') else ""
-            self.risk_manager.open_trade(
-                symbol=symbol,
-                side=side,
-                amount=adjusted_amount,
-                entry_price=order_result.average_price or setup.entry,
-                stop_loss=setup.stop_loss,
-                take_profit=setup.take_profit,
-                category=category,
-            )
-
             log.info(f"    ✓ EXECUTED: {side.upper()} {adjusted_amount} {symbol} "
                      f"@ ${order_result.average_price or setup.entry:,.2f}")
 
-            await self._notify_trade(setup, position, order_result)
+            await self._notify_trade(setup, position, order_result, llm_reason)
             return True
         else:
             log.warning(f"    ✗ Order failed: {order_result.error_message}")
@@ -664,8 +658,8 @@ class ChastiefollCrypto:
         except Exception:
             pass
 
-    async def _notify_trade(self, setup, position, order_result):
-        """Send trade execution notification."""
+    async def _notify_trade(self, setup, position, order_result, llm_reason=""):
+        """Send trade execution notification with LLM approval reason."""
         if not self.telegram:
             return
         try:
@@ -678,6 +672,13 @@ class ChastiefollCrypto:
                 f"TP: `${setup.take_profit:,.2f}`\n"
                 f"Cost: `${order_result.cost:,.2f}`"
             )
+            if llm_reason:
+                reason_short = llm_reason[:180].replace("\n", " ")
+                msg += (
+                    f"\n\n┌─ *AI APPROVAL REASON* ──────┐\n"
+                    f"│ 💡 {reason_short}\n"
+                    f"└────────────────────────────┘"
+                )
             await self.telegram.send_message(msg)
         except Exception:
             pass

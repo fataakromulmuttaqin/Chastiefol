@@ -335,12 +335,15 @@ class ChastiefollMultiMain:
         else:
             log.info(f"✗ Signal rejected: {decision.symbol} — {decision.rejection_reason}")
             if self.telegram:
-                await self.telegram.send_signal_rejected(
-                    symbol=decision.symbol,
-                    action=decision.setup.signal.value,
-                    entry=decision.setup.entry,
-                    reason=decision.rejection_reason,
-                    confidence=decision.setup.confidence,
+                # Fire-and-forget: send Telegram alert without blocking
+                asyncio.create_task(
+                    self.telegram.send_signal_rejected(
+                        symbol=decision.symbol,
+                        action=decision.setup.signal.value,
+                        entry=decision.setup.entry,
+                        reason=decision.rejection_reason,
+                        confidence=decision.setup.confidence,
+                    )
                 )
 
     async def _execute_signal(self, decision: SignalDecision):
@@ -362,6 +365,7 @@ class ChastiefollMultiMain:
                 rr_ratio=decision.setup.rr_ratio,
                 lot_size=decision.lot_size,
                 reasons=decision.setup.reasons,
+                llm_reason=decision.llm_approval_reason,
             )
 
     async def _execute_trade(self, decision: SignalDecision):

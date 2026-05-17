@@ -171,6 +171,7 @@ class TelegramNotifier:
         timeframe: str = "H1",
         atr: float = 0.0,
         spread: float = 0.0,
+        llm_reason: str = "",
     ):
         """Send a rich XAUUSD trading signal alert with full analysis breakdown."""
         emoji = {"BUY": "🟢", "SELL": "🔴", "CLOSE": "⚪"}.get(action.upper(), "📊")
@@ -213,6 +214,10 @@ class TelegramNotifier:
                 icon = "✅" if i <= 3 else "✓"
                 msg += f"│ {icon} {reason}\n"
             msg += f"└────────────────────────────┘\n"
+
+        # AI APPROVAL REASON block
+        if llm_reason:
+            msg += f"\n┌─ *AI APPROVAL REASON* ──────┐\n│ 💡 {llm_reason[:180]}\n└────────────────────────────┘"
 
         # Footer with session & timeframe
         session_str = f" | Session: {session}" if session else ""
@@ -411,6 +416,7 @@ class TelegramNotifier:
         rr_ratio: float = 0.0,
         confidence: float = 0.0,
         execution_method: str = "",
+        llm_reason: str = "",
     ):
         """Send order execution confirmation with rich details."""
         emoji = "✅" if action.upper() in ("BUY", "SELL") else "🔄"
@@ -443,10 +449,20 @@ class TelegramNotifier:
             msg += f"│ 📊 Conf:      `{confidence*100:.0f}%`\n"
         if exec_badge:
             msg += f"│ 🏷️ Via:       {exec_badge}\n"
+        msg += f"│ 🆔 ID:        `{order_id[:20]}`\n"
+        msg += f"└────────────────────────────┘\n"
+
+        # LLM reason why trade was approved
+        if llm_reason:
+            reason_short = llm_reason[:180].replace("\n", " ")
+            msg += (
+                f"\n┌─ *AI APPROVAL REASON* ──────┐\n"
+                f"│ 💡 {reason_short}\n"
+                f"└────────────────────────────┘\n"
+            )
+
         msg += (
-            f"│ 🆔 ID:        `{order_id[:20]}`\n"
-            f"└────────────────────────────┘\n\n"
-            f"⏳ _Trade is now being monitored..._\n"
+            f"\n⏳ _Trade is now being monitored..._\n"
             f"🕐 _{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}_"
         )
         await self._enqueue(msg, NotificationType.ORDER_EXECUTED)

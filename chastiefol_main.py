@@ -512,8 +512,11 @@ class ChastiefollIntegrated:
                     log.info(f"    ✗ LLM rejected webhook signal — skipping execution")
                     await self._notify_warning(f"LLM rejected webhook {side.value} signal: {reason}")
                     return
+                # LLM approved — capture the reasoning for the execution notification
+                llm_approve_reason = insight.summary if insight else ""
             except Exception as e:
                 log.warning(f"    ⚠ LLM review failed for webhook ({e}) — proceeding without review")
+                llm_approve_reason = ""
 
         # Execute
         await self._execute_order(
@@ -523,6 +526,7 @@ class ChastiefollIntegrated:
             stop_loss=stop_loss,
             take_profit=take_profit,
             comment=signal.comment,
+            llm_reason=llm_approve_reason,
         )
 
     # ──────────────────────────────────────────
@@ -671,6 +675,7 @@ class ChastiefollIntegrated:
         log.info(f"{'*'*50}")
 
         # ── LLM REVIEW: Ask AI to validate the signal before execution ──
+        llm_approve_reason = ""
         if self.llm_agent and self._llm_enabled:
             try:
                 insight = await self._llm_review_signal(setup, lot)
@@ -679,6 +684,7 @@ class ChastiefollIntegrated:
                     log.info(f"    ✗ LLM rejected signal for {self.config.symbol} — skipping execution")
                     await self._notify_warning(f"LLM rejected {setup.signal.value} for {self.config.symbol}: {reason}")
                     return
+                llm_approve_reason = insight.summary if insight else ""
             except Exception as e:
                 log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
 
@@ -691,6 +697,7 @@ class ChastiefollIntegrated:
             stop_loss=setup.stop_loss,
             take_profit=setup.take_profit,
             comment=f"Auto:{sess_name}",
+            llm_reason=llm_approve_reason,
         )
 
         # Only send Telegram alert on successful execution
@@ -825,6 +832,7 @@ class ChastiefollIntegrated:
         stop_loss: float,
         take_profit: float,
         comment: str = "Chastiefol",
+        llm_reason: str = "",
     ):
         """Execute order via configured method (MCP, FIX, or Paper).
         
@@ -1013,6 +1021,7 @@ class ChastiefollIntegrated:
                     order_id=order_result.order_id,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
+                    llm_reason=llm_reason,
                 )
             return True
         else:

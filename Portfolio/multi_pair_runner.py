@@ -220,6 +220,7 @@ class SignalDecision:
     approved: bool
     lot_size: float = 0.0
     rejection_reason: str = ""
+    llm_approval_reason: str = ""  # LLM justification for approving this trade
     correlation_adjusted: bool = False
     timestamp: str = ""
 
@@ -435,6 +436,7 @@ class MultiPairRunner:
         correlation_adjusted = (adjusted_lot != lot_size)
 
         # ── LLM REVIEW: Ask AI to validate the signal before execution ──
+        llm_reason = ""
         if self.llm_agent and self._llm_enabled:
             try:
                 llm_approved = await self._llm_review_signal(symbol, setup, adjusted_lot)
@@ -449,6 +451,9 @@ class MultiPairRunner:
                         rejection_reason="LLM rejected signal",
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     )
+                # LLM approved — capture the reason for the Telegram notification
+                if hasattr(self, '_last_llm_insight') and self._last_llm_insight:
+                    llm_reason = self._last_llm_insight.summary if self._last_llm_insight.summary else "AI approved"
             except Exception as e:
                 log.warning(f"[Runner] LLM review failed ({e}) — proceeding without review")
 
@@ -473,6 +478,7 @@ class MultiPairRunner:
             setup=setup,
             approved=True,
             lot_size=adjusted_lot,
+            llm_approval_reason=llm_reason,
             correlation_adjusted=correlation_adjusted,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
@@ -551,6 +557,8 @@ class MultiPairRunner:
         # Approved
         log.info(f"    🧠 LLM APPROVED: {symbol} {setup.signal.value} | "
                  f"AI Confidence: {insight.confidence*100:.0f}%")
+        # Store for caller to retrieve the LLM reasoning
+        self._last_llm_insight = insight
         return True
 
     # ──────────────────────────────────────────
