@@ -206,6 +206,8 @@ class ChastiefollIntegrated:
             max_open_trades=self.config.max_open_trades,
         )
         self.session_filter = GoldSessionFilter()
+        self._market_closed = False   # Set True when broker reports MARKET_CLOSED
+        self._market_closed_at = None  # Timestamp when market closed was first detected
         self.trade_manager = TradeManager()
 
         # ── Account State ──
@@ -499,10 +501,11 @@ class ChastiefollIntegrated:
                     "rr_ratio": round(abs(take_profit - current_price) / abs(current_price - stop_loss), 2) if abs(current_price - stop_loss) > 0 else 0,
                     "reasons": [f"Webhook signal: {signal.comment or 'TradingView'}"],
                 })()
-                llm_approved = await self._llm_review_signal(webhook_setup, volume)
-                if not llm_approved:
+                insight = await self._llm_review_signal(webhook_setup, volume)
+                if not insight or insight.trade_recommendation.upper() == "HOLD":
+                    reason = insight.summary[:200] if insight else "LLM review unavailable"
                     log.info(f"    ✗ LLM rejected webhook signal — skipping execution")
-                    await self._notify_warning(f"LLM rejected webhook {side.value} signal")
+                    await self._notify_warning(f"LLM rejected webhook {side.value} signal: {reason}")
                     return
             except Exception as e:
                 log.warning(f"    ⚠ LLM review failed for webhook ({e}) — proceeding without review")
@@ -565,6 +568,11 @@ class ChastiefollIntegrated:
 # Session filter — skip if off-session
         if not active:
             log.info(f"    ⏳ No signal — {sess_name} (off-session)")
+            return
+
+        # Market-closed guard — pause autonomous scanning until market reopens
+        if self._market_closed:
+            log.info("    ⏸ Market closed — autonomous scanning paused (will auto-resume)")
             return
 
         # Risk check
@@ -658,10 +666,11 @@ class ChastiefollIntegrated:
         # ── LLM REVIEW: Ask AI to validate the signal before execution ──
         if self.llm_agent and self._llm_enabled:
             try:
-                llm_approved = await self._llm_review_signal(setup, lot)
-                if not llm_approved:
+                insight = await self._llm_review_signal(setup, lot)
+                if not insight or insight.trade_recommendation.upper() == "HOLD":
+                    reason = insight.summary[:200] if insight else "LLM review unavailable"
                     log.info(f"    ✗ LLM rejected signal for {self.config.symbol} — skipping execution")
-                    await self._notify_warning(f"LLM rejected {setup.signal.value} signal for {self.config.symbol}")
+                    await self._notify_warning(f"LLM rejected {setup.signal.value} for {self.config.symbol}: {reason}")
                     return
             except Exception as e:
                 log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
@@ -697,21 +706,23 @@ class ChastiefollIntegrated:
     # LLM Signal Review
     # ──────────────────────────────────────────
 
-    async def _llm_review_signal(self, setup, lot_size: float) -> bool:
+    async def _llm_review_signal(self, setup, lot_size: float):
         """
         Ask the LLM to review a signal BEFORE execution.
         The LLM checks against lessons, patterns, and risk rules.
-        
+
         Works for both autonomous signals (TradeSetup) and webhook signals.
-        
-        Returns True if signal is approved, False if rejected.
+
+        Returns an insight object (has .trade_recommendation and .summary).
+        - recommendation == "HOLD" → signal REJECTED
+        - recommendation in ("BUY","SELL") → signal APPROVED
+        - returns True (bool) if LLM unavailable / failed / timeout (auto-approve)
+        - returns None on failure
         """
         if not self.llm_agent:
             return True  # No LLM = auto-approve
 
         symbol = self.config.symbol
-
-        # Build review query
         rr_ratio = getattr(setup, 'rr_ratio', 0)
         confidence = getattr(setup, 'confidence', 0.5)
         reasons = getattr(setup, 'reasons', [])
@@ -738,29 +749,25 @@ class ChastiefollIntegrated:
             f"- reasoning: why approved/rejected"
         )
 
-        # Initialize LLM if needed
         if not self.llm_agent._initialized:
             await self.llm_agent.initialize()
 
-        # Run LLM analysis with timeout
         try:
             insight = await asyncio.wait_for(
                 self.llm_agent.analyze(query=query, role="SCREENER"),
-                timeout=15.0,  # Max 15 seconds for LLM review
+                timeout=15.0,
             )
         except asyncio.TimeoutError:
             log.warning(f"    ⚠ LLM review timed out for {symbol} — auto-approving")
             return True
 
         if not insight:
-            return True  # Failed to get insight = auto-approve
+            return True  # Failed = auto-approve
 
-        # Check LLM recommendation
         recommendation = insight.trade_recommendation.upper()
 
         if recommendation == "HOLD":
-            log.info(f"    🧠 LLM REJECTED: {symbol} | Reason: {insight.summary[:100]}")
-            # Save rejection as a lesson
+            log.info(f"    🧠 LLM REJECTED: {symbol} | Reason: {insight.summary[:150]}")
             if self.lessons:
                 self.lessons.add_lesson(
                     lesson=f"LLM rejected {setup.signal.value} {symbol}: {insight.summary[:150]}",
@@ -770,12 +777,11 @@ class ChastiefollIntegrated:
                     symbol=symbol,
                     confidence=0.6,
                 )
-            return False
+            return insight  # Caller checks .trade_recommendation == "HOLD"
 
-        # Approved
         log.info(f"    🧠 LLM APPROVED: {symbol} {setup.signal.value} | "
                  f"AI Confidence: {insight.confidence*100:.0f}%")
-        return True
+        return insight  # Approved — return insight so caller has full details
 
     # ──────────────────────────────────────────
     # Order Execution (MCP / FIX / Paper)
@@ -846,8 +852,23 @@ class ChastiefollIntegrated:
                 take_profit=take_profit,
             )
             if not order_result.get("success"):
-                log.error(f"FIX order failed: {order_result.get('text')}")
-                await self._notify_error(f"FIX order failed: {order_result.get('text')}")
+                err_text = order_result.get("text", "")
+                # Detect market-closed reject from broker
+                if "MARKET_CLOSED" in err_text.upper() or "SESSION REJECT" in err_text.upper():
+                    if not self._market_closed:
+                        self._market_closed = True
+                        self._market_closed_at = datetime.now(timezone.utc)
+                        log.warning(f"Market closed detected — pausing autonomous cycle")
+                        await self._notify_warning(f"Market closed ({err_text}). Pausing auto-trading ~30 min.")
+                    else:
+                        log.warning(f"Market still closed (since {self._market_closed_at.strftime('%H:%M UTC')})")
+                else:
+                    # Clear market-closed flag on other errors (might be transient)
+                    if self._market_closed:
+                        log.info("Order error different from MARKET_CLOSED — resuming monitoring")
+                        self._market_closed = False
+                log.error(f"FIX order failed: {err_text}")
+                await self._notify_error(f"FIX order failed: {err_text}")
                 return False
 
         else:

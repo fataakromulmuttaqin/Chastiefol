@@ -82,5 +82,29 @@
     "times_validated": 0,
     "times_violated": 0,
     "added_at": "2026-05-17T04:49:48.158534+00:00"
+  },
+  {
+    "id": 1779004197390,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL XAUUSD: XAUUSD SELL signal REJECTED — Critical structural flaws detected. Despite strong technical confluence (ADX 31.7, bearish DI, full EMA stack, Parabolic",
+    "source": "agent",
+    "context": "Rejected at confidence 90%",
+    "symbol": "XAUUSD",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T07:49:57.390544+00:00"
+  },
+  {
+    "id": 1779004679446,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL XAUUSD: XAUUSD SELL signal under review. Technical indicators show strong bearish confluence: ADX 31.7 with -DI (39.3) > +DI (22.9), full EMA bearish stack (2",
+    "source": "agent",
+    "context": "Rejected at confidence 90%",
+    "symbol": "XAUUSD",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T07:57:59.446386+00:00"
   }
 ]
