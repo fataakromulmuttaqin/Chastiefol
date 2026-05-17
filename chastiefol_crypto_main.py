@@ -75,6 +75,7 @@ from Risk.crypto_risk_manager import (
 from LLM.lessons import LessonsManager, TradeRecord
 from LLM.trading_memory import TradingMemory
 from LLM.prompts import CryptoPromptBuilder
+from LLM.llm_agent import LLMInsightAgent, LLMConfig, MarketInsight
 
 logging.basicConfig(
     level=logging.INFO,
@@ -192,6 +193,23 @@ class ChastiefollCrypto:
         self._trades_since_reflection = 0
         self._reflection_interval = 5  # Reflect every N closed trades
 
+        # LLM Review Agent (reviews signals before execution)
+        self.llm_agent: Optional[LLMInsightAgent] = None
+        self._llm_enabled = bool(os.getenv("LLM_PROVIDER") or os.getenv("LLM_API_KEY") or
+                                  os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or
+                                  os.getenv("MINIMAX_API_KEY"))
+        if self._llm_enabled:
+            try:
+                llm_config = LLMConfig.from_env()
+                self.llm_agent = LLMInsightAgent(
+                    config=llm_config,
+                    lessons_manager=self.lessons,
+                    trading_memory=self.trading_memory,
+                )
+            except Exception as e:
+                log.warning(f"LLM agent init failed: {e} — signals will execute without LLM review")
+                self._llm_enabled = False
+
         # State
         self._scan_task: Optional[asyncio.Task] = None
         self._ws_task: Optional[asyncio.Task] = None
@@ -211,6 +229,7 @@ class ChastiefollCrypto:
         log.info(f"  Exchange:   Binance {'(Sandbox)' if self.config.binance_sandbox else '(Live)'}")
         log.info(f"  WebSocket:  {'Enabled' if self.config.enable_websocket else 'Disabled'}")
         log.info(f"  Learning:   ENABLED ({self.lessons.get_stats()['total_lessons']} lessons loaded)")
+        log.info(f"  LLM Review: {'ENABLED (' + str(self.llm_agent.config.provider.value) + '/' + self.llm_agent.config.model + ')' if self._llm_enabled else 'DISABLED (no API key)'}")
         log.info(f"{'='*60}")
 
     # ──────────────────────────────────────────
@@ -471,6 +490,16 @@ class ChastiefollCrypto:
             })
             return True
 
+        # ── LLM REVIEW: Ask AI to validate the signal before execution ──
+        if self.llm_agent and self._llm_enabled:
+            try:
+                llm_approved = await self._llm_review_signal(signal_info, setup, position)
+                if not llm_approved:
+                    log.info(f"    ✗ LLM rejected signal for {symbol} — skipping execution")
+                    return False
+            except Exception as e:
+                log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
+
         # Execute order
         side = "buy" if setup.signal.value == "BUY" else "sell"
         order_result = await self.connector.open_position(
@@ -634,6 +663,81 @@ class ChastiefollCrypto:
     # ──────────────────────────────────────────
     # Learning & Memory (Auto-lesson generation)
     # ──────────────────────────────────────────
+
+    async def _llm_review_signal(self, signal_info: Dict, setup, position) -> bool:
+        """
+        Ask the LLM to review a signal BEFORE execution.
+        The LLM checks against lessons, patterns, and risk rules.
+        
+        Returns True if signal is approved, False if rejected.
+        """
+        if not self.llm_agent:
+            return True  # No LLM = auto-approve
+
+        symbol = signal_info["symbol"]
+        
+        # Build review query
+        query = (
+            f"SIGNAL REVIEW REQUEST — should I execute this trade?\n\n"
+            f"Symbol: {symbol}\n"
+            f"Direction: {setup.signal.value}\n"
+            f"Entry: ${setup.entry:,.2f}\n"
+            f"Stop Loss: ${setup.stop_loss:,.2f}\n"
+            f"Take Profit: ${setup.take_profit:,.2f}\n"
+            f"R:R Ratio: {setup.rr_ratio}\n"
+            f"Confidence: {setup.confidence*100:.0f}%\n"
+            f"Position Value: ${position.value_usdt:,.2f}\n"
+            f"Risk: ${position.risk_usdt:,.2f} ({position.risk_pct:.1f}%)\n"
+            f"Confluence Reasons: {', '.join(setup.reasons[:5])}\n\n"
+            f"Before approving, check:\n"
+            f"1. Does this match your lessons? (call get_lessons if needed)\n"
+            f"2. Does assess_setup show favorable history for this symbol?\n"
+            f"3. Does the R:R and confidence meet minimum standards?\n"
+            f"4. Is there any reason from past experience to avoid this trade?\n\n"
+            f"Respond with Final Answer JSON including:\n"
+            f"- trade_recommendation: 'BUY' or 'SELL' or 'HOLD'\n"
+            f"- If HOLD = trade is REJECTED\n"
+            f"- reasoning: why approved/rejected"
+        )
+
+        # Initialize LLM if needed
+        if not self.llm_agent._initialized:
+            await self.llm_agent.initialize()
+
+        # Run LLM analysis with timeout
+        try:
+            insight = await asyncio.wait_for(
+                self.llm_agent.analyze(query=query, role="SCREENER"),
+                timeout=15.0,  # Max 15 seconds for LLM review
+            )
+        except asyncio.TimeoutError:
+            log.warning(f"    ⚠ LLM review timed out for {symbol} — auto-approving")
+            return True
+
+        if not insight:
+            return True  # Failed to get insight = auto-approve
+
+        # Check LLM recommendation
+        recommendation = insight.trade_recommendation.upper()
+        
+        if recommendation == "HOLD":
+            log.info(f"    🧠 LLM REJECTED: {symbol} | Reason: {insight.summary[:100]}")
+            # Save rejection as a lesson
+            if self.lessons:
+                self.lessons.add_lesson(
+                    lesson=f"LLM rejected {setup.signal.value} {symbol}: {insight.summary[:150]}",
+                    role="SCREENER",
+                    source="agent",
+                    context=f"Rejected at confidence {setup.confidence*100:.0f}%",
+                    symbol=symbol,
+                    confidence=0.6,
+                )
+            return False
+        
+        # Approved
+        log.info(f"    🧠 LLM APPROVED: {symbol} {setup.signal.value} | "
+                 f"AI Confidence: {insight.confidence*100:.0f}%")
+        return True
 
     async def _record_and_learn(
         self,

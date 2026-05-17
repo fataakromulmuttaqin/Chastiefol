@@ -51,6 +51,7 @@ class LLMProvider(str, Enum):
     GROQ = "groq"
     OPENROUTER = "openrouter"
     OLLAMA = "ollama"
+    MINIMAX = "minimax"
 
 
 @dataclass
@@ -94,6 +95,11 @@ class LLMConfig:
                 "base_url": "http://localhost:11434/v1",
                 "model": "llama3.1",
                 "api_key_env": "",
+            },
+            LLMProvider.MINIMAX: {
+                "base_url": "https://api.minimaxi.chat/v1",
+                "model": "MiniMax-Text-01",
+                "api_key_env": "MINIMAX_API_KEY",
             },
         }
         d = defaults[provider]
