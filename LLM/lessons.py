@@ -38,6 +38,10 @@ log = logging.getLogger("LLM.Lessons")
 # Configuration
 # ──────────────────────────────────────────────
 
+# Lessons data directory — SHARED across all trading modes (paper/demo/testnet/live).
+# This means lessons learned during demo trading are automatically available
+# when switching to live mode. The LLM's knowledge persists between sessions
+# and across mode changes, enabling the bot to learn in demo and apply in live.
 DATA_DIR = Path(__file__).parent / "data"
 LESSONS_FILE = DATA_DIR / "lessons.json"
 PERFORMANCE_FILE = DATA_DIR / "performance.json"
