@@ -110,7 +110,7 @@ class MultiPairConfig:
         self.scan_interval_sec = int(os.getenv("SCAN_INTERVAL_SEC", "60"))
 
         # Pairs
-        self.pairs = ["XAUUSD", "BTCUSD"]
+        self.pairs = ["XAUUSD", "BTCUSD", "PAXGUSDT"]
 
 
 # ──────────────────────────────────────────────
@@ -196,6 +196,9 @@ class ChastiefollMultiMain:
             elif symbol == "BTCUSD":
                 feed_symbol = f"BINANCE:BTCUSDT"
                 binance_symbol = "BTC/USDT"  # Real BTC data from Binance
+            elif symbol == "PAXGUSDT":
+                feed_symbol = "BINANCE:PAXGUSDT"
+                binance_symbol = "PAXG/USDT"  # Same — PAXG/USDT is the actual pair
             else:
                 feed_symbol = f"BINANCE:{symbol.replace('USD', 'USDT')}"
                 binance_symbol = f"{symbol.replace('USD', '/USDT')}"
@@ -362,10 +365,20 @@ class ChastiefollMultiMain:
             )
 
     async def _execute_trade(self, decision: SignalDecision):
-        """Execute trade via shared FIX Trade connection."""
+        """Execute trade via shared FIX connection (XAUUSD/BTCUSD) or Binance CCXT (crypto).
+
+        PAXGUSDT is a crypto pair — skip FIX, handle via Binance paper execution.
+        """
         if self.config.paper_mode:
             log.info(f"  [PAPER] {decision.setup.signal.value} {decision.symbol} "
                      f"{decision.lot_size} lots @ ${decision.setup.entry:.2f}")
+            return
+
+        # PAXGUSDT trades on Binance, not cTrader — execute via Binance connector
+        if decision.symbol == "PAXGUSDT":
+            log.info(f"  [BINANCE] {decision.setup.signal.value} PAXGUSDT "
+                     f"{decision.lot_size} lots @ ${decision.setup.entry:.2f}")
+            # TODO: integrate Binance connector for live PAXGUSDT execution
             return
 
         if not self.fix_connector:

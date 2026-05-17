@@ -18,5 +18,25 @@
     "timeframe": "1h",
     "closed_at": "2026-05-17T04:10:04.730415+00:00",
     "market_conditions": {}
+  },
+  {
+    "trade_id": "W/USDT_1778991748",
+    "symbol": "W/USDT",
+    "direction": "sell",
+    "amount": 7937.0,
+    "entry_price": 0.0129,
+    "exit_price": 0.0129,
+    "pnl_usd": 0.0,
+    "pnl_pct": 0.0,
+    "duration_min": 5,
+    "stop_loss": 0.0128,
+    "take_profit": 0.0123,
+    "confidence_at_entry": 0.5,
+    "reasons_at_entry": [],
+    "close_reason": "sl_hit",
+    "category": "infrastructure",
+    "timeframe": "1h",
+    "closed_at": "2026-05-17T04:22:28.430910+00:00",
+    "market_conditions": {}
   }
 ]

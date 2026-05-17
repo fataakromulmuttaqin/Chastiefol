@@ -157,6 +157,43 @@ BTCUSD_CONFIG = PairConfig(
 PAIR_CONFIGS = {
     "XAUUSD": XAUUSD_CONFIG,
     "BTCUSD": BTCUSD_CONFIG,
+    "PAXGUSDT": PairConfig(
+        symbol="PAXGUSDT",
+        base_asset="PAXG",
+        quote_asset="USDT",
+        fix_symbol_id=None,  # Crypto — use Binance connector, not cTrader FIX
+
+        # Contract: PAXG is tokenized gold, 1 token = 1 troy oz
+        contract_size=1.0,
+        min_lot_size=0.01,
+        max_lot_size=100.0,
+        lot_step=0.01,
+        pip_size=0.01,
+
+        # Risk: gold-backed token, slightly wider spreads than spot
+        atr_sl_multiplier=2.0,
+        rr_target=2.0,
+        min_rr=1.5,
+
+        # Filters
+        min_adx=20,
+        min_confluence=50,
+
+        # FVG: percentage-based (0.05% of price ≈ $2.25 at $4,534)
+        min_fvg_size=2.0,
+        min_fvg_pct=0.05,
+
+        # Session: trades 24/7 (crypto)
+        use_session_filter=False,
+        high_prob_sessions=[],
+
+        # Costs: higher spread than spot gold due to token minting/redemption
+        typical_spread=1.0,
+        commission_per_lot=0.0,
+        slippage=0.5,
+
+        price_decimals=2,
+    ),
 }
 
 

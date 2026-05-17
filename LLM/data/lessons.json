@@ -58,5 +58,17 @@
     "times_validated": 0,
     "times_violated": 0,
     "added_at": "2026-05-17T04:04:45.119510+00:00"
+  },
+  {
+    "id": 1778991775900,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL BONK/USDT: BONK/USDT SELL signal REJECTED — Critical structural flaw detected. Entry, Stop Loss, and Take Profit are all set to $0.00, making risk parameters und",
+    "source": "agent",
+    "context": "Rejected at confidence 77%",
+    "symbol": "BONK/USDT",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T04:22:55.900110+00:00"
   }
 ]
