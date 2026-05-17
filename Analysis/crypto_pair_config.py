@@ -840,6 +840,19 @@ CRYPTO_CONFIGS: Dict[str, CryptoPairConfig] = {
     "DOT/USDT": DOT_USDT,
     "AVAX/USDT": AVAX_USDT,
     "LINK/USDT": LINK_USDT,
+    # Gold-backed tokens (alternative XAUUSD data feed backup)
+    "PAXG/USDT": CryptoPairConfig(
+        symbol="PAXG/USDT", base_asset="PAXG", category=CryptoCategory.COMMODITY,
+        avg_daily_range_pct=1.5, max_position_pct=10.0,
+        atr_multiplier=2.0, risk_pct=2.0, min_rr=1.5,
+        position_limit=3, max_daily_trades=5,
+    ),
+    "XAUT/USDT": CryptoPairConfig(
+        symbol="XAUT/USDT", base_asset="XAUT", category=CryptoCategory.COMMODITY,
+        avg_daily_range_pct=1.2, max_position_pct=8.0,
+        atr_multiplier=2.0, risk_pct=2.0, min_rr=1.5,
+        position_limit=3, max_daily_trades=5,
+    ),
     # Mid Cap
     **MID_CAP_PAIRS,
     # DeFi
@@ -934,10 +947,11 @@ def get_all_symbols() -> List[str]:
 def get_watchlist(tier: str = "top20") -> List[str]:
     """
     Get a pre-defined watchlist.
-    
+
     Tiers:
     - "top10": BTC, ETH, BNB, SOL, XRP, ADA, DOT, AVAX, LINK, DOGE
     - "top20": top10 + MATIC, UNI, ATOM, LTC, ARB, OP, NEAR, INJ, SUI, APT
+    - "gold": PAXG/USDT (tokenized gold), XAUT/USDT (gold stablecoin)
     - "defi": DeFi tokens only
     - "ai": AI narrative tokens
     - "meme": Meme coins (high risk)
@@ -951,6 +965,8 @@ def get_watchlist(tier: str = "top20") -> List[str]:
                 "ADA/USDT", "DOT/USDT", "AVAX/USDT", "LINK/USDT", "DOGE/USDT",
                 "MATIC/USDT", "UNI/USDT", "ATOM/USDT", "LTC/USDT", "ARB/USDT",
                 "OP/USDT", "NEAR/USDT", "INJ/USDT", "SUI/USDT", "APT/USDT"]
+    elif tier == "gold":
+        return ["PAXG/USDT", "XAUT/USDT"]
     elif tier == "defi":
         return [c.symbol for c in get_pairs_by_category(CryptoCategory.DEFI)]
     elif tier == "ai":
