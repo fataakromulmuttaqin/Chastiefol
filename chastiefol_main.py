@@ -457,6 +457,7 @@ class ChastiefollIntegrated:
         pos_spec = self.position_sizer.calculate(self.account, current_price, stop_loss)
         volume = round(pos_spec.lot_size * status["size_multiplier"], 2)
         volume = max(volume, signal.volume)  # Use at least the signal volume
+        volume = max(volume, 1.0)  # Enforce minimum 1.0 lot for cTrader FIX demo server
 
         # ── LLM REVIEW: Ask AI to validate webhook signal before execution ──
         if self.llm_agent and self._llm_enabled:
@@ -600,6 +601,7 @@ class ChastiefollIntegrated:
             self.account, setup.entry, setup.stop_loss
         )
         lot = round(pos_spec.lot_size * status["size_multiplier"], 2)
+        lot = max(lot, 1.0)  # Enforce minimum 1.0 lot for cTrader FIX demo server
         log.info(f"  Verified Entry: ${setup.entry:.2f} (FIX validated)")
 
         log.info(f"{'*'*50}")
