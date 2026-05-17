@@ -931,13 +931,19 @@ class TelegramNotifier:
         }
 
     async def test_connection(self) -> bool:
-        """Test if bot token and chat_id are valid."""
+        """Test if bot token and chat_id are valid.
+
+        Uses a bounded timeout so a slow/hung Telegram API can't stall
+        Chastiefol startup indefinitely. Without this, a network blackhole
+        on api.telegram.org would block the boot path forever.
+        """
         if not self.config.bot_token or not self.config.chat_id:
             return False
 
         url = f"{self.BASE_URL.format(token=self.config.bot_token)}/getMe"
+        timeout = aiohttp.ClientTimeout(total=10)
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -947,6 +953,9 @@ class TelegramNotifier:
                     else:
                         log.error(f"Bot verification failed: HTTP {resp.status}")
                         return False
+        except asyncio.TimeoutError:
+            log.error("Telegram bot verification timed out after 10s")
+            return False
         except Exception as e:
             log.error(f"Connection test failed: {e}")
             return False

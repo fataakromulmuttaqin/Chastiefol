@@ -103,11 +103,27 @@ def count_lessons_today(lessons):
 
 
 async def send_telegram(text: str):
+    """Best-effort Telegram delivery for the daily report cron.
+
+    Uses an explicit timeout so a slow/blocked Telegram API can't hang the
+    cron job indefinitely, and logs failures so missed reports are visible
+    instead of being silently dropped.
+    """
     import aiohttp
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    async with aiohttp.ClientSession() as session:
-        await session.post(url, json=payload)
+    timeout = aiohttp.ClientTimeout(total=15)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(
+                        f"[daily_report] Telegram returned HTTP {resp.status}: "
+                        f"{body[:200]}"
+                    )
+    except Exception as exc:  # network error, timeout, dns, etc.
+        print(f"[daily_report] Telegram send failed ({type(exc).__name__}): {exc}")
 
 
 def build_report(stats, lessons_today, date_str):

@@ -34,12 +34,23 @@ from abc import ABC, abstractmethod
 
 import aiohttp
 
+from Common.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("LLM.Agent")
+
+
+class _LLMCallFailed(Exception):
+    """Internal sentinel: an LLM call failed in a way the breaker should count.
+
+    Distinct from CircuitBreakerOpen so the breaker counts it as a failure
+    and re-raises it; chat() then translates it back to an empty string for
+    callers that expect "no response" semantics.
+    """
 
 
 # ──────────────────────────────────────────────
@@ -66,6 +77,11 @@ class LLMConfig:
     max_tokens: int = 2048
     timeout: int = 30
     max_react_steps: int = 5
+    # Retry policy for transient errors (network, 429/5xx). Permanent
+    # errors (4xx other than 429) are NOT retried — they indicate a bug
+    # or auth issue and retrying just delays the failure.
+    max_retries: int = 3
+    retry_backoff_base: float = 1.0  # seconds; doubles per attempt
 
     # Provider-specific defaults
     @classmethod
@@ -445,6 +461,15 @@ class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
         self._session: Optional[aiohttp.ClientSession] = None
+        # Trip the breaker after several consecutive request failures so a
+        # dead/rate-limited provider doesn't burn through every analyse()
+        # cycle. Recovery_timeout is generous — LLM outages are typically
+        # multi-minute and we'd rather degrade to HOLD than hammer the API.
+        self._breaker = CircuitBreaker(
+            name=f"llm:{config.provider.value}",
+            failure_threshold=int(os.getenv("LLM_BREAKER_THRESHOLD", "5")),
+            recovery_timeout=float(os.getenv("LLM_BREAKER_COOLDOWN", "60")),
+        )
 
     async def init(self):
         timeout_env = int(os.getenv("LLM_TIMEOUT", "120"))
@@ -458,14 +483,119 @@ class LLMClient:
             self._session = None
 
     async def chat(self, messages: List[Dict[str, str]]) -> str:
-        """Send chat completion request to the configured LLM provider."""
+        """Send chat completion request to the configured LLM provider.
+
+        Calls flow through a circuit breaker so a dead/rate-limited
+        provider fails fast instead of stalling the trading loop. When
+        the breaker is OPEN we return an empty string — callers already
+        treat that as "LLM unavailable, fall back to HOLD" — and log the
+        skip at debug level to avoid spamming.
+        """
         if not self._session:
             await self.init()
 
-        if self.config.provider == LLMProvider.ANTHROPIC:
-            return await self._anthropic_chat(messages)
-        else:
-            return await self._openai_compatible_chat(messages)
+        async def _do_call() -> str:
+            if self.config.provider == LLMProvider.ANTHROPIC:
+                result = await self._anthropic_chat(messages)
+            else:
+                result = await self._openai_compatible_chat(messages)
+            # Empty string from _post_with_retry means a permanent error
+            # (4xx auth/model bug) or exhausted retries — both should count
+            # toward tripping the breaker so we stop hammering the provider.
+            if not result:
+                raise _LLMCallFailed("LLM returned empty response")
+            return result
+
+        try:
+            return await self._breaker.call(_do_call)
+        except CircuitBreakerOpen as e:
+            log.debug("Skipping LLM call: %s", e)
+            return ""
+        except _LLMCallFailed:
+            # Already logged by _post_with_retry; just propagate the empty.
+            return ""
+
+    # ── Shared retry helper ──────────────────────────────────────
+    # Retries on:
+    #   - asyncio.TimeoutError / aiohttp.ClientError (transient network)
+    #   - HTTP 408 (Request Timeout), 425 (Too Early), 429 (Rate Limit)
+    #   - HTTP 5xx (server errors)
+    # Does NOT retry on 4xx (bug / auth / model-not-found) — those are
+    # permanent and retrying just wastes the user's tokens & time.
+
+    _RETRYABLE_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+    async def _post_with_retry(
+        self,
+        url: str,
+        payload: Dict,
+        headers: Dict,
+        provider_label: str,
+    ) -> Optional[Dict]:
+        """POST JSON with retry/backoff on transient errors.
+
+        Returns parsed JSON on success, None on permanent failure or after
+        exhausting retries. Logs every failure with provider context so
+        operators can spot rate-limits vs misconfiguration.
+        """
+        max_attempts = max(1, self.config.max_retries)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with self._session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+
+                    # Capture body for diagnostic logging (truncated).
+                    body = await resp.text()
+                    if resp.status in self._RETRYABLE_STATUSES and attempt < max_attempts:
+                        # Honor Retry-After when present (seconds or HTTP-date),
+                        # otherwise fall back to exponential backoff.
+                        delay = self._compute_backoff(resp.headers.get("Retry-After"), attempt)
+                        log.warning(
+                            "%s API %s on attempt %d/%d — retrying in %.1fs: %s",
+                            provider_label, resp.status, attempt, max_attempts, delay, body[:200],
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    # Permanent error or final attempt.
+                    log.error(
+                        "%s API error %s (final attempt %d/%d): %s",
+                        provider_label, resp.status, attempt, max_attempts, body[:200],
+                    )
+                    return None
+
+            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                if attempt < max_attempts:
+                    delay = self._compute_backoff(None, attempt)
+                    log.warning(
+                        "%s request failed (%s) on attempt %d/%d — retrying in %.1fs: %s",
+                        provider_label, type(e).__name__, attempt, max_attempts, delay, e,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                log.error(
+                    "%s request failed after %d attempts: %s: %s",
+                    provider_label, max_attempts, type(e).__name__, e,
+                )
+                return None
+
+        return None  # unreachable, but keeps type-checkers happy
+
+    def _compute_backoff(self, retry_after_header: Optional[str], attempt: int) -> float:
+        """Compute backoff delay; respects Retry-After when sane."""
+        if retry_after_header:
+            try:
+                # Header is either delta-seconds (int) or HTTP-date.
+                delay = float(retry_after_header)
+                # Clamp to a sane range so a misbehaving server can't
+                # stall us for hours.
+                return max(0.0, min(delay, 60.0))
+            except ValueError:
+                pass  # non-numeric (HTTP-date) — fall through to backoff
+
+        # Exponential backoff: base * 2^(attempt-1), with a 30s ceiling.
+        return min(self.config.retry_backoff_base * (2 ** (attempt - 1)), 30.0)
 
     async def _openai_compatible_chat(self, messages: List[Dict[str, str]]) -> str:
         """OpenAI-compatible API (works for OpenAI, Groq, OpenRouter, Ollama)."""
@@ -482,17 +612,13 @@ class LLMClient:
             "max_tokens": self.config.max_tokens,
         }
 
+        data = await self._post_with_retry(url, payload, headers, "LLM")
+        if not data:
+            return ""
         try:
-            async with self._session.post(url, json=payload, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data["choices"][0]["message"]["content"]
-                else:
-                    text = await resp.text()
-                    log.error(f"LLM API error {resp.status}: {text[:200]}")
-                    return ""
-        except Exception as e:
-            log.error(f"LLM request failed: {e}")
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as e:
+            log.error(f"LLM response missing expected fields: {e} | payload={data!r}")
             return ""
 
     async def _anthropic_chat(self, messages: List[Dict[str, str]]) -> str:
@@ -522,17 +648,13 @@ class LLMClient:
         if system_msg:
             payload["system"] = system_msg
 
+        data = await self._post_with_retry(url, payload, headers, "Anthropic")
+        if not data:
+            return ""
         try:
-            async with self._session.post(url, json=payload, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data["content"][0]["text"]
-                else:
-                    text = await resp.text()
-                    log.error(f"Anthropic API error {resp.status}: {text[:200]}")
-                    return ""
-        except Exception as e:
-            log.error(f"Anthropic request failed: {e}")
+            return data["content"][0]["text"]
+        except (KeyError, IndexError, TypeError) as e:
+            log.error(f"Anthropic response missing expected fields: {e} | payload={data!r}")
             return ""
 
 
