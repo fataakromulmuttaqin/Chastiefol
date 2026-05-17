@@ -67,6 +67,9 @@ from Portfolio.portfolio_manager import (
     PortfolioManager, PortfolioConfig, PortfolioState,
     PairConfig as PortfolioPairConfig, PairCategory, PairStatus,
 )
+from LLM.llm_agent import LLMInsightAgent, LLMConfig, MarketInsight
+from LLM.lessons import LessonsManager
+from LLM.trading_memory import TradingMemory
 
 logging.basicConfig(
     level=logging.INFO,
@@ -304,10 +307,32 @@ class MultiPairRunner:
         self.decisions: List[SignalDecision] = []
         self._running = False
 
+        # ── LLM Review Agent (validates signals before execution) ──
+        self.lessons = LessonsManager()
+        self.trading_memory = TradingMemory(self.lessons)
+        self.llm_agent: Optional[LLMInsightAgent] = None
+        self._llm_enabled = bool(
+            os.getenv("LLM_PROVIDER") or os.getenv("LLM_API_KEY") or
+            os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or
+            os.getenv("MINIMAX_API_KEY")
+        )
+        if self._llm_enabled:
+            try:
+                llm_config = LLMConfig.from_env()
+                self.llm_agent = LLMInsightAgent(
+                    config=llm_config,
+                    lessons_manager=self.lessons,
+                    trading_memory=self.trading_memory,
+                )
+            except Exception as e:
+                log.warning(f"LLM agent init failed: {e} — signals will execute without LLM review")
+                self._llm_enabled = False
+
         log.info(f"[Runner] MultiPairRunner initialized | "
                  f"Pairs: {[p.symbol for p in pairs]} | "
                  f"Balance: ${initial_balance:,.2f} | "
-                 f"Max risk: {max_total_risk_pct}%")
+                 f"Max risk: {max_total_risk_pct}% | "
+                 f"LLM Review: {'ENABLED' if self._llm_enabled else 'DISABLED'}")
 
     # ──────────────────────────────────────────
     # Data Feed Interface
@@ -368,9 +393,9 @@ class MultiPairRunner:
             if setup:
                 signals.append((symbol, worker, setup))
 
-        # Process signals through portfolio manager
+        # Process signals through portfolio manager + LLM review
         for symbol, worker, setup in signals:
-            decision = self._process_signal(symbol, worker, setup)
+            decision = await self._process_signal(symbol, worker, setup)
             self.decisions.append(decision)
 
             # Fire callbacks
@@ -380,7 +405,7 @@ class MultiPairRunner:
             if decision.approved and self.on_trade_open:
                 self.on_trade_open(decision)
 
-    def _process_signal(self, symbol: str, worker: PairWorker,
+    async def _process_signal(self, symbol: str, worker: PairWorker,
                         setup: TradeSetup) -> SignalDecision:
         """
         Process a signal through portfolio risk checks.
@@ -409,6 +434,24 @@ class MultiPairRunner:
         adjusted_lot = self.portfolio.get_adjusted_lot_size(symbol, lot_size)
         correlation_adjusted = (adjusted_lot != lot_size)
 
+        # ── LLM REVIEW: Ask AI to validate the signal before execution ──
+        if self.llm_agent and self._llm_enabled:
+            try:
+                llm_approved = await self._llm_review_signal(symbol, setup, adjusted_lot)
+                if not llm_approved:
+                    worker.state.signals_rejected += 1
+                    log.info(f"[Runner] Signal REJECTED by LLM for {symbol}")
+                    return SignalDecision(
+                        symbol=symbol,
+                        setup=setup,
+                        approved=False,
+                        lot_size=0.0,
+                        rejection_reason="LLM rejected signal",
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    )
+            except Exception as e:
+                log.warning(f"[Runner] LLM review failed ({e}) — proceeding without review")
+
         # Register trade in portfolio
         self.portfolio.open_trade(
             symbol=symbol,
@@ -433,6 +476,82 @@ class MultiPairRunner:
             correlation_adjusted=correlation_adjusted,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
+
+    # ──────────────────────────────────────────
+    # LLM Signal Review
+    # ──────────────────────────────────────────
+
+    async def _llm_review_signal(self, symbol: str, setup: TradeSetup, lot_size: float) -> bool:
+        """
+        Ask the LLM to review a signal BEFORE execution.
+        The LLM checks against lessons, patterns, and risk rules.
+        
+        Returns True if signal is approved, False if rejected.
+        """
+        if not self.llm_agent:
+            return True  # No LLM = auto-approve
+
+        # Build review query
+        query = (
+            f"SIGNAL REVIEW REQUEST — should I execute this trade?\n\n"
+            f"Symbol: {symbol}\n"
+            f"Direction: {setup.signal.value}\n"
+            f"Entry: ${setup.entry:,.2f}\n"
+            f"Stop Loss: ${setup.stop_loss:,.2f}\n"
+            f"Take Profit: ${setup.take_profit:,.2f}\n"
+            f"R:R Ratio: {setup.rr_ratio}\n"
+            f"Confidence: {setup.confidence*100:.0f}%\n"
+            f"Lot Size: {lot_size}\n"
+            f"Confluence Reasons: {', '.join(setup.reasons[:5]) if setup.reasons else 'N/A'}\n\n"
+            f"Before approving, check:\n"
+            f"1. Does this match your lessons? (call get_lessons if needed)\n"
+            f"2. Does assess_setup show favorable history for {symbol}?\n"
+            f"3. Does the R:R and confidence meet minimum standards?\n"
+            f"4. Is there any reason from past experience to avoid this trade?\n\n"
+            f"Respond with Final Answer JSON including:\n"
+            f"- trade_recommendation: 'BUY' or 'SELL' or 'HOLD'\n"
+            f"- If HOLD = trade is REJECTED\n"
+            f"- reasoning: why approved/rejected"
+        )
+
+        # Initialize LLM if needed
+        if not self.llm_agent._initialized:
+            await self.llm_agent.initialize()
+
+        # Run LLM analysis with timeout
+        try:
+            insight = await asyncio.wait_for(
+                self.llm_agent.analyze(query=query, role="SCREENER"),
+                timeout=15.0,  # Max 15 seconds for LLM review
+            )
+        except asyncio.TimeoutError:
+            log.warning(f"    ⚠ LLM review timed out for {symbol} — auto-approving")
+            return True
+
+        if not insight:
+            return True  # Failed to get insight = auto-approve
+
+        # Check LLM recommendation
+        recommendation = insight.trade_recommendation.upper()
+
+        if recommendation == "HOLD":
+            log.info(f"    🧠 LLM REJECTED: {symbol} | Reason: {insight.summary[:100]}")
+            # Save rejection as a lesson
+            if self.lessons:
+                self.lessons.add_lesson(
+                    lesson=f"LLM rejected {setup.signal.value} {symbol}: {insight.summary[:150]}",
+                    role="SCREENER",
+                    source="agent",
+                    context=f"Rejected at confidence {setup.confidence*100:.0f}%",
+                    symbol=symbol,
+                    confidence=0.6,
+                )
+            return False
+
+        # Approved
+        log.info(f"    🧠 LLM APPROVED: {symbol} {setup.signal.value} | "
+                 f"AI Confidence: {insight.confidence*100:.0f}%")
+        return True
 
     # ──────────────────────────────────────────
     # Trade Closure

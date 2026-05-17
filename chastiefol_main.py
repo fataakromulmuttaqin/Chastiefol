@@ -44,6 +44,9 @@ from Risk.risk_manager import (
     AccountState, DrawdownGuard, PositionSizer, GoldSessionFilter,
     TradeManager, TradeLifecycle, RiskModel
 )
+from LLM.llm_agent import LLMInsightAgent, LLMConfig, MarketInsight
+from LLM.lessons import LessonsManager
+from LLM.trading_memory import TradingMemory
 
 logging.basicConfig(
     level=logging.INFO,
@@ -227,6 +230,27 @@ class ChastiefollIntegrated:
         self._scan_task: Optional[asyncio.Task] = None
         self._webhook_consumer_task: Optional[asyncio.Task] = None
 
+        # ── LLM Review Agent (validates signals before execution) ──
+        self.lessons = LessonsManager()
+        self.trading_memory = TradingMemory(self.lessons)
+        self.llm_agent: Optional[LLMInsightAgent] = None
+        self._llm_enabled = bool(
+            os.getenv("LLM_PROVIDER") or os.getenv("LLM_API_KEY") or
+            os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or
+            os.getenv("MINIMAX_API_KEY")
+        )
+        if self._llm_enabled:
+            try:
+                llm_config = LLMConfig.from_env()
+                self.llm_agent = LLMInsightAgent(
+                    config=llm_config,
+                    lessons_manager=self.lessons,
+                    trading_memory=self.trading_memory,
+                )
+            except Exception as e:
+                log.warning(f"LLM agent init failed: {e} — signals will execute without LLM review")
+                self._llm_enabled = False
+
         log.info(f"{'='*55}")
         log.info(f"  CHASTIEFOL INTEGRATED AGENT")
         log.info(f"  Mode: {self.config.mode.value.upper()}")
@@ -234,6 +258,8 @@ class ChastiefollIntegrated:
         log.info(f"  Instance: {self.config.instance_id} (webhook port {self.config.webhook_port})")
         log.info(f"  Execution: {self.config.execution_method.upper()}")
         log.info(f"  Paper: {self.config.paper_mode}")
+        log.info(f"  LLM Review: {'ENABLED (' + self.llm_agent.config.provider.value + '/' + self.llm_agent.config.model + ')' if self._llm_enabled else 'DISABLED (no API key)'}")
+        log.info(f"  Learning: ENABLED ({self.lessons.get_stats()['total_lessons']} lessons loaded)")
         log.info(f"{'='*55}")
 
     # ──────────────────────────────────────────
@@ -432,6 +458,27 @@ class ChastiefollIntegrated:
         volume = round(pos_spec.lot_size * status["size_multiplier"], 2)
         volume = max(volume, signal.volume)  # Use at least the signal volume
 
+        # ── LLM REVIEW: Ask AI to validate webhook signal before execution ──
+        if self.llm_agent and self._llm_enabled:
+            try:
+                # Create a synthetic TradeSetup-like object for LLM review
+                webhook_setup = type("WebhookSetup", (), {
+                    "signal": type("Sig", (), {"value": side.value})(),
+                    "entry": current_price,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "confidence": 0.70,  # Webhook signals get default confidence
+                    "rr_ratio": round(abs(take_profit - current_price) / abs(current_price - stop_loss), 2) if abs(current_price - stop_loss) > 0 else 0,
+                    "reasons": [f"Webhook signal: {signal.comment or 'TradingView'}"],
+                })()
+                llm_approved = await self._llm_review_signal(webhook_setup, volume)
+                if not llm_approved:
+                    log.info(f"    ✗ LLM rejected webhook signal — skipping execution")
+                    await self._notify_warning(f"LLM rejected webhook {side.value} signal")
+                    return
+            except Exception as e:
+                log.warning(f"    ⚠ LLM review failed for webhook ({e}) — proceeding without review")
+
         # Execute
         await self._execute_order(
             side=side,
@@ -575,6 +622,16 @@ class ChastiefollIntegrated:
                 reasons=setup.reasons,
             )
 
+        # ── LLM REVIEW: Ask AI to validate the signal before execution ──
+        if self.llm_agent and self._llm_enabled:
+            try:
+                llm_approved = await self._llm_review_signal(setup, lot)
+                if not llm_approved:
+                    log.info(f"    ✗ LLM rejected signal for {self.config.symbol} — skipping execution")
+                    return
+            except Exception as e:
+                log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
+
         # Execute
         side = OrderSide.BUY if setup.signal == Signal.BUY else OrderSide.SELL
         await self._execute_order(
@@ -588,6 +645,90 @@ class ChastiefollIntegrated:
         self.signal_count += 1
 
 
+
+    # ──────────────────────────────────────────
+    # LLM Signal Review
+    # ──────────────────────────────────────────
+
+    async def _llm_review_signal(self, setup, lot_size: float) -> bool:
+        """
+        Ask the LLM to review a signal BEFORE execution.
+        The LLM checks against lessons, patterns, and risk rules.
+        
+        Works for both autonomous signals (TradeSetup) and webhook signals.
+        
+        Returns True if signal is approved, False if rejected.
+        """
+        if not self.llm_agent:
+            return True  # No LLM = auto-approve
+
+        symbol = self.config.symbol
+
+        # Build review query
+        rr_ratio = getattr(setup, 'rr_ratio', 0)
+        confidence = getattr(setup, 'confidence', 0.5)
+        reasons = getattr(setup, 'reasons', [])
+
+        query = (
+            f"SIGNAL REVIEW REQUEST — should I execute this XAUUSD trade?\n\n"
+            f"Symbol: {symbol}\n"
+            f"Direction: {setup.signal.value}\n"
+            f"Entry: ${setup.entry:,.2f}\n"
+            f"Stop Loss: ${setup.stop_loss:,.2f}\n"
+            f"Take Profit: ${setup.take_profit:,.2f}\n"
+            f"R:R Ratio: {rr_ratio}\n"
+            f"Confidence: {confidence*100:.0f}%\n"
+            f"Lot Size: {lot_size}\n"
+            f"Confluence Reasons: {', '.join(reasons[:5]) if reasons else 'N/A'}\n\n"
+            f"Before approving, check:\n"
+            f"1. Does this match your lessons? (call get_lessons if needed)\n"
+            f"2. Does assess_setup show favorable history for XAUUSD?\n"
+            f"3. Does the R:R and confidence meet minimum standards?\n"
+            f"4. Is there any reason from past experience to avoid this trade?\n\n"
+            f"Respond with Final Answer JSON including:\n"
+            f"- trade_recommendation: 'BUY' or 'SELL' or 'HOLD'\n"
+            f"- If HOLD = trade is REJECTED\n"
+            f"- reasoning: why approved/rejected"
+        )
+
+        # Initialize LLM if needed
+        if not self.llm_agent._initialized:
+            await self.llm_agent.initialize()
+
+        # Run LLM analysis with timeout
+        try:
+            insight = await asyncio.wait_for(
+                self.llm_agent.analyze(query=query, role="SCREENER"),
+                timeout=15.0,  # Max 15 seconds for LLM review
+            )
+        except asyncio.TimeoutError:
+            log.warning(f"    ⚠ LLM review timed out for {symbol} — auto-approving")
+            return True
+
+        if not insight:
+            return True  # Failed to get insight = auto-approve
+
+        # Check LLM recommendation
+        recommendation = insight.trade_recommendation.upper()
+
+        if recommendation == "HOLD":
+            log.info(f"    🧠 LLM REJECTED: {symbol} | Reason: {insight.summary[:100]}")
+            # Save rejection as a lesson
+            if self.lessons:
+                self.lessons.add_lesson(
+                    lesson=f"LLM rejected {setup.signal.value} {symbol}: {insight.summary[:150]}",
+                    role="SCREENER",
+                    source="agent",
+                    context=f"Rejected at confidence {confidence*100:.0f}%",
+                    symbol=symbol,
+                    confidence=0.6,
+                )
+            return False
+
+        # Approved
+        log.info(f"    🧠 LLM APPROVED: {symbol} {setup.signal.value} | "
+                 f"AI Confidence: {insight.confidence*100:.0f}%")
+        return True
 
     # ──────────────────────────────────────────
     # Order Execution (MCP / FIX / Paper)
