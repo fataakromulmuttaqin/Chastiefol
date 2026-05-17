@@ -43,6 +43,7 @@ class CryptoCategory(str, Enum):
     LAYER2 = "layer2"
     GAMING = "gaming"
     INFRASTRUCTURE = "infrastructure"
+    COMMODITY = "commodity"  # Gold-backed tokens: PAXG, XAUT
 
 
 # ──────────────────────────────────────────────
