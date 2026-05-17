@@ -49,6 +49,12 @@ class BinanceWSConfig:
     # Alternative endpoints (for latency or region)
     # wss://stream.binance.com:443
     # wss://data-stream.binance.vision (historical data streaming)
+    #
+    # Demo/Testnet endpoints:
+    # Spot Testnet: wss://testnet.binance.vision
+    # Spot Demo: wss://demo-stream.binance.com:9443
+    # Futures Demo: wss://demo-fstream.binance.com
+    # Futures Testnet: wss://fstream.binancefuture.com
 
     # Reconnection settings
     reconnect_attempts: int = 10
@@ -61,6 +67,24 @@ class BinanceWSConfig:
 
     # Maximum streams per connection (Binance limit: 1024)
     max_streams_per_connection: int = 200
+
+    @classmethod
+    def for_demo_mode(cls, demo_mode: str = "live") -> "BinanceWSConfig":
+        """
+        Create WebSocket config for a specific demo mode.
+        
+        Args:
+            demo_mode: "live" | "testnet" | "demo" | "futures_demo" | "futures_testnet"
+        """
+        ws_urls = {
+            "live": "wss://stream.binance.com:9443",
+            "paper": "wss://stream.binance.com:9443",  # Paper still uses live data
+            "testnet": "wss://testnet.binance.vision",
+            "demo": "wss://demo-stream.binance.com:9443",
+            "futures_demo": "wss://demo-fstream.binance.com",
+            "futures_testnet": "wss://fstream.binancefuture.com",
+        }
+        return cls(base_url=ws_urls.get(demo_mode, ws_urls["live"]))
 
 
 # ──────────────────────────────────────────────

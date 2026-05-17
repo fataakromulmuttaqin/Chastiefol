@@ -59,6 +59,46 @@ class OrderType(str, Enum):
     STOP_MARKET = "stop_market"
 
 
+class BinanceDemoMode(str, Enum):
+    """Binance demo/testnet mode selection."""
+    LIVE = "live"               # Real money trading
+    PAPER = "paper"             # Local simulation (no API calls)
+    TESTNET = "testnet"         # Binance Spot Testnet (testnet.binance.vision)
+    DEMO = "demo"              # Binance Demo Trading (api-gcp.binance.com with demo keys)
+    FUTURES_DEMO = "futures_demo"  # Binance Futures Demo (demo-fapi.binance.com)
+    FUTURES_TESTNET = "futures_testnet"  # Binance Futures Testnet (testnet.binancefuture.com)
+
+
+# Endpoint configuration for each demo mode
+BINANCE_ENDPOINTS = {
+    BinanceDemoMode.LIVE: {
+        "rest": "https://api.binance.com",
+        "ws": "wss://stream.binance.com:9443",
+        "ws_api": "wss://ws-api.binance.com:443/ws-api/v3",
+    },
+    BinanceDemoMode.TESTNET: {
+        "rest": "https://testnet.binance.vision",
+        "ws": "wss://testnet.binance.vision",
+        "ws_api": "wss://ws-api.testnet.binance.vision/ws-api/v3",
+    },
+    BinanceDemoMode.DEMO: {
+        "rest": "https://api-gcp.binance.com",
+        "ws": "wss://demo-stream.binance.com:9443",
+        "ws_api": "wss://demo-ws-api.binance.com/ws-api/v3",
+    },
+    BinanceDemoMode.FUTURES_DEMO: {
+        "rest": "https://demo-fapi.binance.com",
+        "ws": "wss://demo-fstream.binance.com",
+        "ws_api": "",
+    },
+    BinanceDemoMode.FUTURES_TESTNET: {
+        "rest": "https://testnet.binancefuture.com",
+        "ws": "wss://fstream.binancefuture.com",
+        "ws_api": "",
+    },
+}
+
+
 @dataclass
 class BinanceConfig:
     """Binance connector configuration."""
@@ -66,7 +106,8 @@ class BinanceConfig:
     secret: str = ""
 
     # Exchange settings
-    sandbox: bool = False               # Use Binance testnet
+    sandbox: bool = False               # Use Binance testnet (legacy flag, use demo_mode instead)
+    demo_mode: str = "paper"            # "live" | "paper" | "testnet" | "demo" | "futures_demo" | "futures_testnet"
     default_type: str = "spot"          # "spot" | "future" | "margin"
     recv_window: int = 5000             # Binance recvWindow (ms)
 
@@ -80,6 +121,38 @@ class BinanceConfig:
     max_daily_orders: int = 50              # Max orders per day
     confirm_large_orders: bool = True       # Require confirmation for large orders
     large_order_threshold_usd: float = 5000.0
+
+    @property
+    def effective_demo_mode(self) -> BinanceDemoMode:
+        """Get the effective demo mode enum value."""
+        if self.paper_mode and self.demo_mode == "paper":
+            return BinanceDemoMode.PAPER
+        try:
+            return BinanceDemoMode(self.demo_mode)
+        except ValueError:
+            return BinanceDemoMode.PAPER
+
+    @property
+    def endpoints(self) -> Dict[str, str]:
+        """Get the correct API endpoints for current demo mode."""
+        mode = self.effective_demo_mode
+        if mode == BinanceDemoMode.PAPER:
+            # Paper mode doesn't need real endpoints but use live for market data
+            return BINANCE_ENDPOINTS[BinanceDemoMode.LIVE]
+        return BINANCE_ENDPOINTS.get(mode, BINANCE_ENDPOINTS[BinanceDemoMode.LIVE])
+
+    @property
+    def is_demo_or_testnet(self) -> bool:
+        """Check if running in any non-live mode."""
+        return self.effective_demo_mode != BinanceDemoMode.LIVE
+
+    @property
+    def is_futures(self) -> bool:
+        """Check if running in futures mode."""
+        return self.effective_demo_mode in (
+            BinanceDemoMode.FUTURES_DEMO,
+            BinanceDemoMode.FUTURES_TESTNET,
+        ) or self.default_type == "future"
 
 
 @dataclass
@@ -183,9 +256,9 @@ class BinanceConnector:
         self._order_history: List[OrderResult] = []
 
         log.info(f"BinanceConnector initialized | "
-                 f"Mode: {'PAPER' if self.config.paper_mode else 'LIVE'} | "
+                 f"Mode: {'PAPER' if self.config.paper_mode else self.config.demo_mode.upper()} | "
                  f"Type: {self.config.default_type} | "
-                 f"Sandbox: {self.config.sandbox}")
+                 f"Demo: {self.config.effective_demo_mode.value}")
 
     # ──────────────────────────────────────────
     # Connection Lifecycle
@@ -195,6 +268,9 @@ class BinanceConnector:
         """Initialize CCXT exchange and verify connection."""
         try:
             import ccxt.async_support as ccxt_async
+
+            demo_mode = self.config.effective_demo_mode
+            endpoints = self.config.endpoints
 
             exchange_config = {
                 "apiKey": self.config.api_key,
@@ -207,30 +283,78 @@ class BinanceConnector:
                 },
             }
 
-            self._exchange = ccxt_async.binance(exchange_config)
+            # Select the correct CCXT exchange class based on mode
+            if self.config.is_futures:
+                self._exchange = ccxt_async.binance(exchange_config)
+                self._exchange.options["defaultType"] = "future"
+            else:
+                self._exchange = ccxt_async.binance(exchange_config)
 
-            if self.config.sandbox:
+            # Configure endpoints based on demo mode
+            if demo_mode == BinanceDemoMode.TESTNET:
+                # Use CCXT built-in sandbox mode for spot testnet
                 self._exchange.set_sandbox_mode(True)
-                log.info("[Binance] Sandbox/testnet mode enabled")
+                log.info("[Binance] Spot TESTNET mode enabled (testnet.binance.vision)")
 
-            # Load markets
-            await self._exchange.load_markets()
-            self._markets_loaded = True
+            elif demo_mode == BinanceDemoMode.DEMO:
+                # Binance Demo Trading — override URLs manually
+                self._exchange.urls["api"]["public"] = endpoints["rest"] + "/api/v3"
+                self._exchange.urls["api"]["private"] = endpoints["rest"] + "/api/v3"
+                self._exchange.urls["api"]["sapi"] = endpoints["rest"] + "/sapi/v1"
+                log.info("[Binance] DEMO TRADING mode enabled (api-gcp.binance.com)")
+                log.info("    ⚠ Use API keys from Binance Demo Trading page")
+
+            elif demo_mode == BinanceDemoMode.FUTURES_DEMO:
+                # Binance Futures Demo
+                self._exchange.urls["api"]["fapiPublic"] = endpoints["rest"] + "/fapi/v1"
+                self._exchange.urls["api"]["fapiPrivate"] = endpoints["rest"] + "/fapi/v1"
+                self._exchange.urls["api"]["fapiPrivateV2"] = endpoints["rest"] + "/fapi/v2"
+                self._exchange.options["defaultType"] = "future"
+                log.info("[Binance] FUTURES DEMO mode enabled (demo-fapi.binance.com)")
+                log.info("    ⚠ Use API keys from Binance Demo Trading page")
+
+            elif demo_mode == BinanceDemoMode.FUTURES_TESTNET:
+                # Binance Futures Testnet — use CCXT sandbox
+                self._exchange.set_sandbox_mode(True)
+                self._exchange.options["defaultType"] = "future"
+                log.info("[Binance] FUTURES TESTNET mode enabled (testnet.binancefuture.com)")
+
+            elif demo_mode == BinanceDemoMode.LIVE:
+                log.info("[Binance] LIVE mode — real money trading!")
+
+            elif demo_mode == BinanceDemoMode.PAPER:
+                log.info("[Binance] PAPER mode — local simulation (no API calls)")
+
+            # Legacy sandbox flag support
+            if self.config.sandbox and demo_mode == BinanceDemoMode.LIVE:
+                self._exchange.set_sandbox_mode(True)
+                log.info("[Binance] Legacy sandbox flag enabled")
+
+            # Load markets (skip for paper-only mode without API keys)
+            if demo_mode != BinanceDemoMode.PAPER or self.config.api_key:
+                await self._exchange.load_markets()
+                self._markets_loaded = True
+                market_count = len(self._exchange.markets)
+                log.info(f"[Binance] Connected | Markets: {market_count} | "
+                         f"Mode: {demo_mode.value.upper()}")
+            else:
+                self._markets_loaded = False
+                log.info("[Binance] Paper mode — markets not loaded (no API key)")
+
             self._connected = True
 
-            market_count = len(self._exchange.markets)
-            log.info(f"[Binance] Connected | Markets: {market_count}")
-
-            # Verify API key (if not paper mode)
+            # Verify API key (if not paper mode and key provided)
             if not self.config.paper_mode and self.config.api_key:
                 try:
                     balance = await self._exchange.fetch_balance()
                     usdt_free = float(balance.get("USDT", {}).get("free", 0))
-                    log.info(f"[Binance] API verified | USDT balance: ${usdt_free:,.2f}")
+                    log.info(f"[Binance] API verified | USDT balance: ${usdt_free:,.2f} "
+                             f"({'DEMO' if self.config.is_demo_or_testnet else 'LIVE'})")
                 except Exception as e:
                     log.warning(f"[Binance] API key verification failed: {e}")
-                    log.warning("[Binance] Falling back to paper mode")
-                    self.config.paper_mode = True
+                    if not self.config.is_demo_or_testnet:
+                        log.warning("[Binance] Falling back to paper mode")
+                        self.config.paper_mode = True
 
             return True
 

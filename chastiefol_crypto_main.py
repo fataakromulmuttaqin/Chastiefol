@@ -110,6 +110,13 @@ class CryptoConfig:
     binance_secret: str = ""
     binance_sandbox: bool = False
 
+    # Binance Demo Mode
+    # Options: "paper" | "demo" | "testnet" | "futures_demo" | "futures_testnet" | "live"
+    binance_demo_mode: str = "paper"
+    binance_demo_api_key: str = ""     # Separate API key for demo/testnet
+    binance_demo_secret: str = ""      # Separate secret for demo/testnet
+    binance_default_type: str = "spot"  # "spot" | "future"
+
     # Data Providers
     coingecko_api_key: str = ""
     coinmarketcap_api_key: str = ""
@@ -134,6 +141,25 @@ class CryptoConfig:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    @property
+    def effective_api_key(self) -> str:
+        """Get the correct API key based on demo mode."""
+        if self.binance_demo_mode in ("demo", "testnet", "futures_demo", "futures_testnet"):
+            return self.binance_demo_api_key or self.binance_api_key
+        return self.binance_api_key
+
+    @property
+    def effective_secret(self) -> str:
+        """Get the correct secret based on demo mode."""
+        if self.binance_demo_mode in ("demo", "testnet", "futures_demo", "futures_testnet"):
+            return self.binance_demo_secret or self.binance_secret
+        return self.binance_secret
+
+    @property
+    def is_paper_mode(self) -> bool:
+        """Check if running in paper/simulation mode."""
+        return self.mode == CryptoMode.PAPER or self.binance_demo_mode == "paper"
+
     @classmethod
     def from_env(cls) -> "CryptoConfig":
         """Load configuration from environment variables."""
@@ -144,6 +170,10 @@ class CryptoConfig:
             binance_api_key=os.getenv("BINANCE_API_KEY", ""),
             binance_secret=os.getenv("BINANCE_SECRET", ""),
             binance_sandbox=os.getenv("BINANCE_SANDBOX", "false").lower() == "true",
+            binance_demo_mode=os.getenv("BINANCE_DEMO_MODE", "paper"),
+            binance_demo_api_key=os.getenv("BINANCE_DEMO_API_KEY", ""),
+            binance_demo_secret=os.getenv("BINANCE_DEMO_SECRET", ""),
+            binance_default_type=os.getenv("BINANCE_DEFAULT_TYPE", "spot"),
             coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
             coinmarketcap_api_key=os.getenv("COINMARKETCAP_API_KEY", ""),
             coinstats_api_key=os.getenv("COINSTATS_API_KEY", ""),
@@ -226,7 +256,8 @@ class ChastiefollCrypto:
         log.info(f"  Balance:    ${self.config.initial_balance:,.2f}")
         log.info(f"  Risk/Trade: {self.config.risk_pct_per_trade}%")
         log.info(f"  Max Trades: {self.config.max_open_trades}")
-        log.info(f"  Exchange:   Binance {'(Sandbox)' if self.config.binance_sandbox else '(Live)'}")
+        log.info(f"  Exchange:   Binance | Demo Mode: {self.config.binance_demo_mode.upper()}")
+        log.info(f"  Market:     {self.config.binance_default_type.upper()}")
         log.info(f"  WebSocket:  {'Enabled' if self.config.enable_websocket else 'Disabled'}")
         log.info(f"  Learning:   ENABLED ({self.lessons.get_stats()['total_lessons']} lessons loaded)")
         log.info(f"  LLM Review: {'ENABLED (' + str(self.llm_agent.config.provider.value) + '/' + self.llm_agent.config.model + ')' if self._llm_enabled else 'DISABLED (no API key)'}")
@@ -242,9 +273,9 @@ class ChastiefollCrypto:
 
         # 1. Initialize Data Feed
         feed_config = CryptoDataFeedConfig(
-            binance_api_key=self.config.binance_api_key,
-            binance_secret=self.config.binance_secret,
-            sandbox_mode=self.config.binance_sandbox,
+            binance_api_key=self.config.effective_api_key,
+            binance_secret=self.config.effective_secret,
+            sandbox_mode=self.config.binance_sandbox or self.config.binance_demo_mode == "testnet",
             coingecko_api_key=self.config.coingecko_api_key,
             coinmarketcap_api_key=self.config.coinmarketcap_api_key,
             coinstats_api_key=self.config.coinstats_api_key,
@@ -256,15 +287,31 @@ class ChastiefollCrypto:
 
         # 2. Initialize Binance Connector
         is_paper = self.config.mode in (CryptoMode.PAPER, CryptoMode.SCANNER)
+        demo_mode = self.config.binance_demo_mode
+
+        # Use demo keys if in demo/testnet mode, otherwise use live keys
+        effective_key = self.config.effective_api_key
+        effective_secret = self.config.effective_secret
+
         connector_config = BinanceConfig(
-            api_key=self.config.binance_api_key,
-            secret=self.config.binance_secret,
+            api_key=effective_key,
+            secret=effective_secret,
             sandbox=self.config.binance_sandbox,
-            paper_mode=is_paper,
+            demo_mode=demo_mode,
+            default_type=self.config.binance_default_type,
+            paper_mode=is_paper and demo_mode == "paper",
         )
         self.connector = BinanceConnector(connector_config)
         await self.connector.connect()
-        log.info(f"  ✓ Binance connector ({'PAPER' if is_paper else 'LIVE'})")
+
+        # Determine display mode
+        if is_paper and demo_mode == "paper":
+            mode_display = "PAPER (local simulation)"
+        elif demo_mode in ("demo", "testnet", "futures_demo", "futures_testnet"):
+            mode_display = f"DEMO ({demo_mode.upper()} — virtual funds)"
+        else:
+            mode_display = "LIVE (real money!)"
+        log.info(f"  ✓ Binance connector ({mode_display})")
 
         # 3. Initialize Risk Manager
         risk_config = CryptoRiskConfig(
