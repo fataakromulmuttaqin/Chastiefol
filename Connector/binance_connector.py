@@ -588,21 +588,65 @@ class BinanceConnector:
                 stop_loss_price=stop_loss,
             )
             if not oco_result.success:
-                log.warning(f"[Binance] Entry filled but OCO SL/TP failed: {oco_result.error_message}")
-                # Entry still succeeded — notify but don't fail
-                entry_result.error_message = f"SL/TP OCO failed: {oco_result.error_message}"
+                log.warning(f"[Binance] OCO failed ({oco_result.error_message}) — trying fallback SL+TP split")
+                # Fallback: place SL and TP as separate orders
+                sl_success = False
+                tp_success = False
+
+                # Stop-loss: stop-limit order
+                sl_price = stop_loss * (0.999 if close_side == "sell" else 1.001)
+                sl_result = await self.stop_limit_order(
+                    symbol=symbol,
+                    side=close_side,
+                    amount=filled_amount,
+                    price=sl_price,
+                    stop_price=stop_loss,
+                )
+                if sl_result.success:
+                    log.info(f"[Binance] SL placed @ {stop_loss:.6f}")
+                    sl_success = True
+                else:
+                    log.warning(f"[Binance] SL fallback failed: {sl_result.error_message}")
+
+                # Take-profit: limit order
+                tp_result = await self.limit_order(
+                    symbol=symbol,
+                    side=close_side,
+                    amount=filled_amount,
+                    price=take_profit,
+                )
+                if tp_result.success:
+                    log.info(f"[Binance] TP placed @ {take_profit:.6f}")
+                    tp_success = True
+                else:
+                    log.warning(f"[Binance] TP fallback failed: {tp_result.error_message}")
+
+                if not sl_success and not tp_success:
+                    entry_result.error_message = f"SL/TP failed: {sl_result.error_message}"
+                elif not sl_success:
+                    entry_result.error_message = f"SL failed: {sl_result.error_message}"
+                elif not tp_success:
+                    entry_result.error_message = f"TP failed: {tp_result.error_message}"
+                else:
+                    entry_result.error_message = f"SL/TP set via fallback (OCO unavailable)"
+            else:
+                log.info(f"[Binance] SL+TP OCO placed: SL={stop_loss:.6f} TP={take_profit:.6f}")
 
         elif stop_loss > 0:
             # Only SL
             close_side = "sell" if side == "buy" else "buy"
             filled_amount = entry_result.filled if entry_result.filled > 0 else amount
-            await self.stop_limit_order(
+            sl_result = await self.stop_limit_order(
                 symbol=symbol,
                 side=close_side,
                 amount=filled_amount,
                 price=stop_loss * (0.999 if close_side == "sell" else 1.001),
                 stop_price=stop_loss,
             )
+            if sl_result.success:
+                log.info(f"[Binance] SL placed @ {stop_loss:.6f}")
+            else:
+                log.warning(f"[Binance] SL order failed: {sl_result.error_message}")
 
         return entry_result
 

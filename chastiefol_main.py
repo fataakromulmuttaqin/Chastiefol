@@ -630,6 +630,7 @@ class ChastiefollIntegrated:
                 llm_approved = await self._llm_review_signal(setup, lot)
                 if not llm_approved:
                     log.info(f"    ✗ LLM rejected signal for {self.config.symbol} — skipping execution")
+                    await self._notify_warning(f"LLM rejected {side.value} signal for {self.config.symbol}")
                     return
             except Exception as e:
                 log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")

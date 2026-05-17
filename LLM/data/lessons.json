@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1778983974533,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL BOME/USDT: Unable to generate insight — LLM did not respond.",
+    "source": "agent",
+    "context": "Rejected at confidence 82%",
+    "symbol": "BOME/USDT",
+    "confidence": 0.7999999999999999,
+    "times_validated": 2,
+    "times_violated": 0,
+    "added_at": "2026-05-17T02:12:54.533701+00:00"
+  },
+  {
+    "id": 1778986436756,
+    "role": "SCREENER",
+    "lesson": "LLM rejected BUY TRX/USDT: Signal REJECTED — critical structural flaws detected. Entry price equals Stop Loss ($0.35), making risk parameters undefined and R:R calculation inval",
+    "source": "agent",
+    "context": "Rejected at confidence 79%",
+    "symbol": "TRX/USDT",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T02:53:56.756178+00:00"
+  },
+  {
+    "id": 1778986758798,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL DYDX/USDT: DYDX/USDT SELL signal REJECTED — Entry equals Stop Loss equals Take Profit ($0.14 all three), making risk parameters undefined and R:R calculation mat",
+    "source": "agent",
+    "context": "Rejected at confidence 90%",
+    "symbol": "DYDX/USDT",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T02:59:18.798244+00:00"
+  },
+  {
+    "id": 1778988436003,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL XAUUSD: XAUUSD SELL signal under review. Technical indicators show bearish confluence (ADX 33.3 with -DI>+DI, Parabolic SAR at 4537.27, full EMA bearish stack",
+    "source": "agent",
+    "context": "Rejected at confidence 57%",
+    "symbol": "XAUUSD",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T03:27:16.003782+00:00"
+  },
+  {
+    "id": 1778990685119,
+    "role": "SCREENER",
+    "lesson": "LLM rejected SELL W/USDT: SELL W/USDT signal REJECTED — Critical structural flaws make this trade unexecutable regardless of technical confluence.",
+    "source": "agent",
+    "context": "Rejected at confidence 83%",
+    "symbol": "W/USDT",
+    "confidence": 0.6,
+    "times_validated": 0,
+    "times_violated": 0,
+    "added_at": "2026-05-17T04:04:45.119510+00:00"
+  }
+]

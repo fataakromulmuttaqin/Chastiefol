@@ -261,6 +261,28 @@ class TelegramNotifier:
 
         await self._enqueue(msg, NotificationType.ERROR)
 
+    async def send_signal_rejected(
+        self,
+        symbol: str,
+        action: str,
+        entry: float,
+        reason: str,
+        confidence: float = 0.0,
+    ):
+        """Send signal rejection notification."""
+        emoji = {"BUY": "🟢", "SELL": "🔴"}.get(action.upper(), "📊")
+        direction_emoji = "📈" if action.upper() == "BUY" else "📉"
+        msg = (
+            f"{emoji} *SIGNAL REJECTED*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{direction_emoji} *{action.upper()}* `{symbol}`\n\n"
+            f"💰 Entry: `${entry:.2f}`\n"
+            f"📊 Confidence: `{confidence*100:.0f}%`\n\n"
+            f"🔍 *Reason:*\n  {reason}\n\n"
+            f"🕐 _{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+        )
+        await self._enqueue(msg, NotificationType.SIGNAL)
+
     async def send_warning(self, warning_message: str):
         """Send warning notification."""
         msg = (

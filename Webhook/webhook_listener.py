@@ -262,7 +262,7 @@ class WebhookListener:
             )
 
         # Volume validation (optional for CLOSE action)
-        volume = float(payload.get("volume", 0.01))
+        volume = float(payload.get("volume", 1.0))
         if action != TradeAction.CLOSE:
             if volume < self.config.min_volume:
                 raise ValueError(

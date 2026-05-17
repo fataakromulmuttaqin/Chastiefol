@@ -188,19 +188,27 @@ class ChastiefollMultiMain:
                 log.warning("⚠ No FIX_PASSWORD set — paper mode")
             log.info("✓ Paper mode active")
 
-        # 3. Data Feeds (GoldAPI only — FIX provides live price fallback)
-        if self.config.goldapi_api_key:
-            for symbol in self.config.pairs:
-                feed_symbol = symbol[:3] + "/" + symbol[3:]  # XAUUSD → XAU/USD
-                feed_config = DataFeedConfig(
-                    goldapi_api_key=self.config.goldapi_api_key,
-                    symbol=feed_symbol,
-                    default_timeframe=Timeframe.H1,
-                )
-                feed = DataFeedManager(feed_config)
-                await feed.initialize()
-                self.data_feeds[symbol] = feed
-                log.info(f"✓ DataFeed: GoldAPI → {feed_symbol}")
+        # 3. Data Feeds (TradingView WebSocket primary — FREE, no API key)
+        for symbol in self.config.pairs:
+            if symbol == "XAUUSD":
+                feed_symbol = "OANDA:XAUUSD"
+                binance_symbol = "PAXG/USDT"  # Gold proxy via PAXG
+            elif symbol == "BTCUSD":
+                feed_symbol = f"BINANCE:BTCUSDT"
+                binance_symbol = "BTC/USDT"  # Real BTC data from Binance
+            else:
+                feed_symbol = f"BINANCE:{symbol.replace('USD', 'USDT')}"
+                binance_symbol = f"{symbol.replace('USD', '/USDT')}"
+            feed_config = DataFeedConfig(
+                symbol=feed_symbol,
+                default_timeframe=Timeframe.H1,
+                bars_to_load=200,
+                binance_gold_symbol=binance_symbol,
+            )
+            feed = DataFeedManager(feed_config)
+            await feed.initialize()
+            self.data_feeds[symbol] = feed
+            log.info(f"✓ DataFeed: TradingView WS → {feed_symbol} (CCXT fallback: {binance_symbol})")
 
         # 4. Multi-Pair Runner (portfolio orchestrator)
         self.runner = create_default_runner(
@@ -281,7 +289,7 @@ class ChastiefollMultiMain:
                     self.runner.feed_candle(symbol, candle)
 
             # Fallback: if no data feed or feed failed, use FIX live quote
-            if not df or df.empty:
+            if df is None or df.empty:
                 quote = self.fix_connector.get_latest_quote(symbol) if self.fix_connector else None
                 if quote:
                     bid = quote.get("bid", "")
@@ -323,6 +331,14 @@ class ChastiefollMultiMain:
             asyncio.create_task(self._execute_signal(decision))
         else:
             log.info(f"✗ Signal rejected: {decision.symbol} — {decision.rejection_reason}")
+            if self.telegram:
+                await self.telegram.send_signal_rejected(
+                    symbol=decision.symbol,
+                    action=decision.setup.signal.value,
+                    entry=decision.setup.entry,
+                    reason=decision.rejection_reason,
+                    confidence=decision.setup.confidence,
+                )
 
     async def _execute_signal(self, decision: SignalDecision):
         """Async signal handler: execute trade + send Telegram."""

@@ -1,0 +1,22 @@
+[
+  {
+    "trade_id": "CATI/USDT_1778991004",
+    "symbol": "CATI/USDT",
+    "direction": "sell",
+    "amount": 1923.0,
+    "entry_price": 0.0528,
+    "exit_price": 0.0528,
+    "pnl_usd": 0.0,
+    "pnl_pct": 0.0,
+    "duration_min": 5,
+    "stop_loss": 0.0527,
+    "take_profit": 0.0505,
+    "confidence_at_entry": 0.5,
+    "reasons_at_entry": [],
+    "close_reason": "sl_hit",
+    "category": "gaming",
+    "timeframe": "1h",
+    "closed_at": "2026-05-17T04:10:04.730415+00:00",
+    "market_conditions": {}
+  }
+]
