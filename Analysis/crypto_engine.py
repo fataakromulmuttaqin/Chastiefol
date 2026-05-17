@@ -123,6 +123,150 @@ class CryptoIndicators(TechnicalIndicators):
         return float(percentile)
 
     @staticmethod
+    def fibonacci_levels(high: pd.Series, low: pd.Series, close: pd.Series,
+                         lookback: int = 50,
+                         retracement_levels: List[float] = None,
+                         extension_levels: List[float] = None,
+                         ) -> Dict[str, any]:
+        """
+        Fibonacci Retracement & Extension levels based on recent swing high/low.
+
+        Finds the highest high and lowest low within the lookback period,
+        then calculates Fibonacci retracement levels between them.
+        Also calculates extension levels beyond the swing.
+
+        Args:
+            high: High price series
+            low: Low price series
+            close: Close price series
+            lookback: Bars to look back for swing detection
+            retracement_levels: List of Fib ratios [0.236, 0.382, 0.5, 0.618, 0.786]
+            extension_levels: List of extension ratios [1.0, 1.272, 1.618, 2.0]
+
+        Returns:
+            Dict with:
+            - swing_high: float
+            - swing_low: float
+            - trend: "up" or "down" (based on which came last)
+            - retracements: Dict[float, float] mapping ratio → price level
+            - extensions: Dict[float, float] mapping ratio → price level
+            - current_price: float
+            - nearest_level: float (closest fib level to current price)
+            - nearest_ratio: float (the ratio of nearest level)
+            - distance_pct: float (distance to nearest level as % of price)
+        """
+        if retracement_levels is None:
+            retracement_levels = [0.236, 0.382, 0.5, 0.618, 0.786]
+        if extension_levels is None:
+            extension_levels = [1.0, 1.272, 1.618, 2.0, 2.618]
+
+        if len(high) < lookback:
+            lookback = len(high)
+
+        recent_high = high.tail(lookback)
+        recent_low = low.tail(lookback)
+
+        swing_high = float(recent_high.max())
+        swing_low = float(recent_low.min())
+        current = float(close.iloc[-1])
+
+        # Determine trend direction (which swing came last)
+        high_idx = recent_high.idxmax()
+        low_idx = recent_low.idxmin()
+        trend = "up" if low_idx < high_idx else "down"
+
+        swing_range = swing_high - swing_low
+        if swing_range <= 0:
+            return {
+                "swing_high": swing_high, "swing_low": swing_low,
+                "trend": "neutral", "retracements": {}, "extensions": {},
+                "current_price": current, "nearest_level": current,
+                "nearest_ratio": 0.5, "distance_pct": 0.0,
+            }
+
+        # Calculate retracement levels
+        retracements = {}
+        if trend == "up":
+            # Uptrend: retrace from high down
+            for level in retracement_levels:
+                retracements[level] = swing_high - (swing_range * level)
+        else:
+            # Downtrend: retrace from low up
+            for level in retracement_levels:
+                retracements[level] = swing_low + (swing_range * level)
+
+        # Calculate extension levels
+        extensions = {}
+        if trend == "up":
+            for level in extension_levels:
+                extensions[level] = swing_high + (swing_range * (level - 1.0))
+        else:
+            for level in extension_levels:
+                extensions[level] = swing_low - (swing_range * (level - 1.0))
+
+        # Find nearest Fibonacci level to current price
+        all_levels = {**retracements, **extensions}
+        nearest_ratio = 0.5
+        nearest_level = current
+        min_distance = float("inf")
+
+        for ratio, price_level in all_levels.items():
+            dist = abs(current - price_level)
+            if dist < min_distance:
+                min_distance = dist
+                nearest_level = price_level
+                nearest_ratio = ratio
+
+        distance_pct = (min_distance / current * 100) if current > 0 else 0.0
+
+        return {
+            "swing_high": swing_high,
+            "swing_low": swing_low,
+            "trend": trend,
+            "retracements": retracements,
+            "extensions": extensions,
+            "current_price": current,
+            "nearest_level": nearest_level,
+            "nearest_ratio": nearest_ratio,
+            "distance_pct": distance_pct,
+        }
+
+    @staticmethod
+    def is_near_fibonacci(high: pd.Series, low: pd.Series, close: pd.Series,
+                          lookback: int = 50,
+                          proximity_pct: float = 0.3,
+                          key_levels: List[float] = None,
+                          ) -> tuple:
+        """
+        Quick check: is current price near a key Fibonacci level?
+
+        Args:
+            proximity_pct: How close price must be to a fib level (% of price)
+            key_levels: Which fib ratios matter most [0.382, 0.5, 0.618]
+
+        Returns:
+            (is_near: bool, level_info: str)
+        """
+        if key_levels is None:
+            key_levels = [0.382, 0.5, 0.618]
+
+        fib = CryptoIndicators.fibonacci_levels(high, low, close, lookback=lookback)
+
+        if not fib["retracements"]:
+            return False, ""
+
+        current = fib["current_price"]
+
+        # Check if near any key retracement level
+        for ratio, price_level in fib["retracements"].items():
+            if ratio in key_levels:
+                dist_pct = abs(current - price_level) / current * 100
+                if dist_pct <= proximity_pct:
+                    return True, f"Fib {ratio*100:.1f}% @ ${price_level:,.2f} (dist: {dist_pct:.2f}%)"
+
+        return False, ""
+
+    @staticmethod
     def ichimoku_cloud(high: pd.Series, low: pd.Series,
                        tenkan: int = 9, kijun: int = 26,
                        senkou_b: int = 52) -> Dict[str, pd.Series]:
@@ -163,41 +307,62 @@ class CryptoIndicators(TechnicalIndicators):
 class CryptoConfluenceScorer(ConfluenceScorer):
     """
     Extended confluence scorer for crypto with volume-based factors.
-    Crypto markets weight volume more heavily than forex/gold.
+    Reads weights from Analysis/analysis_config.py (user-editable).
     """
 
-    WEIGHTS = {
-        "adx_trending":             12,
-        "psar_aligned":             14,
-        "market_structure_aligned": 14,
-        "ema_aligned":              10,
-        "rsi_zone":                  8,
-        "macd_aligned":              8,
-        "order_block_proximity":     7,
-        "fvg_in_range":              5,
-        "session_active":            2,   # Reduced — crypto is 24/7
-        "bos_confirmed":             5,
-        # Crypto-specific
-        "volume_confirmation":      10,   # Volume spike confirms move
-        "mfi_aligned":               5,   # Money flow direction
-    }
+    def __init__(self, weights: Dict[str, int] = None):
+        """
+        Initialize scorer with custom weights or load from analysis_config.
+
+        Args:
+            weights: Optional custom weights dict. If None, loads from config file.
+        """
+        if weights:
+            self.WEIGHTS = weights
+        else:
+            try:
+                from .analysis_config import CONFLUENCE_WEIGHTS
+                self.WEIGHTS = CONFLUENCE_WEIGHTS
+            except ImportError:
+                # Fallback defaults if config file missing
+                self.WEIGHTS = {
+                    "adx_trending": 12, "psar_aligned": 14,
+                    "market_structure_aligned": 14, "ema_aligned": 10,
+                    "rsi_zone": 8, "macd_aligned": 8,
+                    "order_block_proximity": 7, "fvg_in_range": 5,
+                    "session_active": 2, "bos_confirmed": 5,
+                    "volume_confirmation": 10, "mfi_aligned": 5,
+                    "fibonacci_level": 7,
+                }
 
     def score(self, df: pd.DataFrame, direction: Signal,
               structure: MarketStructure, session_active: bool
               ) -> tuple[int, list[str]]:
-        """Extended scoring with crypto-specific factors."""
+        """Extended scoring with crypto-specific factors + Fibonacci."""
         # Get base score from parent
         score, reasons = super().score(df, direction, structure, session_active)
         
         ci = CryptoIndicators()
+
+        # Load config for fibonacci settings
+        try:
+            from .analysis_config import (
+                FIBONACCI_SWING_LOOKBACK, FIBONACCI_PROXIMITY_PCT,
+                FIBONACCI_KEY_LEVELS, VOLUME_SPIKE_THRESHOLD,
+            )
+        except ImportError:
+            FIBONACCI_SWING_LOOKBACK = 50
+            FIBONACCI_PROXIMITY_PCT = 0.3
+            FIBONACCI_KEY_LEVELS = [0.382, 0.5, 0.618]
+            VOLUME_SPIKE_THRESHOLD = 1.5
 
         # ── Volume Confirmation ──
         if "volume" in df.columns and df["volume"].sum() > 0:
             vol_ratio = ci.volume_ratio(df["volume"])
             current_vol_ratio = vol_ratio.iloc[-1] if not pd.isna(vol_ratio.iloc[-1]) else 1.0
             
-            if current_vol_ratio >= 1.5:
-                score += self.WEIGHTS["volume_confirmation"]
+            if current_vol_ratio >= VOLUME_SPIKE_THRESHOLD:
+                score += self.WEIGHTS.get("volume_confirmation", 10)
                 if current_vol_ratio >= 3.0:
                     reasons.append(f"Extreme volume ({current_vol_ratio:.1f}x avg) — whale activity")
                 elif current_vol_ratio >= 2.0:
@@ -212,11 +377,23 @@ class CryptoConfluenceScorer(ConfluenceScorer):
                 current_mfi = mfi.iloc[-1] if not pd.isna(mfi.iloc[-1]) else 50
                 
                 if direction == Signal.BUY and 30 <= current_mfi <= 70:
-                    score += self.WEIGHTS["mfi_aligned"]
+                    score += self.WEIGHTS.get("mfi_aligned", 5)
                     reasons.append(f"MFI {current_mfi:.0f} — healthy buy zone")
                 elif direction == Signal.SELL and 30 <= current_mfi <= 70:
-                    score += self.WEIGHTS["mfi_aligned"]
+                    score += self.WEIGHTS.get("mfi_aligned", 5)
                     reasons.append(f"MFI {current_mfi:.0f} — healthy sell zone")
+
+        # ── Fibonacci Level Proximity ──
+        if all(col in df.columns for col in ["high", "low", "close"]):
+            is_near, fib_info = ci.is_near_fibonacci(
+                df["high"], df["low"], df["close"],
+                lookback=FIBONACCI_SWING_LOOKBACK,
+                proximity_pct=FIBONACCI_PROXIMITY_PCT,
+                key_levels=FIBONACCI_KEY_LEVELS,
+            )
+            if is_near:
+                score += self.WEIGHTS.get("fibonacci_level", 7)
+                reasons.append(f"Near Fibonacci: {fib_info}")
 
         return min(score, 100), reasons
 
@@ -249,28 +426,57 @@ class CryptoAnalysisEngine:
             print(f"Signal: {setup.signal} | Entry: {setup.entry}")
     """
 
-    # Default thresholds (overridden by pair config)
-    MINIMUM_CONFLUENCE_SCORE = 45   # Slightly lower for crypto (more opportunities)
+    # Default thresholds (loaded from analysis_config.py — user-editable)
+    MINIMUM_CONFLUENCE_SCORE = 45
     MINIMUM_RR = 1.5
-    MINIMUM_ADX = 18                # Crypto trends develop at lower ADX
+    MINIMUM_ADX = 18
 
     def __init__(self, pair_config=None):
         """
         Initialize crypto engine with optional pair config.
         
+        Loads thresholds from Analysis/analysis_config.py (user-editable).
+        Pair-specific overrides from pair_config take priority.
+
         Args:
-            pair_config: CryptoPairConfig instance. If None, uses BTC/USDT defaults.
+            pair_config: CryptoPairConfig instance. If None, uses config defaults.
         """
         self.pair_config = pair_config
         self.structure_analyzer = MarketStructureAnalyzer()
-        self.scorer = CryptoConfluenceScorer()
         self.ti = CryptoIndicators()
 
-        # Apply pair-specific thresholds if provided
+        # Load user-editable config
+        try:
+            from .analysis_config import (
+                MIN_CONFLUENCE_SCORE, MIN_RR_RATIO, MIN_ADX,
+                ATR_SL_MULTIPLIER, RR_TARGET, CONFLUENCE_WEIGHTS,
+                get_category_config,
+            )
+            self.MINIMUM_CONFLUENCE_SCORE = MIN_CONFLUENCE_SCORE
+            self.MINIMUM_RR = MIN_RR_RATIO
+            self.MINIMUM_ADX = MIN_ADX
+            self._default_atr_sl = ATR_SL_MULTIPLIER
+            self._default_rr = RR_TARGET
+
+            # Apply category overrides if pair config has category
+            if pair_config and hasattr(pair_config, 'category'):
+                cat = pair_config.category.value if hasattr(pair_config.category, 'value') else str(pair_config.category)
+                cat_cfg = get_category_config(cat)
+                self.MINIMUM_CONFLUENCE_SCORE = cat_cfg.get("min_confluence", MIN_CONFLUENCE_SCORE)
+                self.MINIMUM_ADX = cat_cfg.get("min_adx", MIN_ADX)
+
+            # Initialize scorer with user-editable weights
+            self.scorer = CryptoConfluenceScorer(weights=CONFLUENCE_WEIGHTS)
+        except ImportError:
+            self._default_atr_sl = 2.5
+            self._default_rr = 2.0
+            self.scorer = CryptoConfluenceScorer()
+
+        # Pair-specific thresholds override config (most specific wins)
         if pair_config:
-            self.MINIMUM_CONFLUENCE_SCORE = getattr(pair_config, 'min_confluence', 45)
-            self.MINIMUM_RR = getattr(pair_config, 'min_rr', 1.5)
-            self.MINIMUM_ADX = getattr(pair_config, 'min_adx', 18)
+            self.MINIMUM_CONFLUENCE_SCORE = getattr(pair_config, 'min_confluence', self.MINIMUM_CONFLUENCE_SCORE)
+            self.MINIMUM_RR = getattr(pair_config, 'min_rr', self.MINIMUM_RR)
+            self.MINIMUM_ADX = getattr(pair_config, 'min_adx', self.MINIMUM_ADX)
 
         symbol = pair_config.symbol if pair_config else "BTC/USDT"
         log.info(f"CryptoAnalysisEngine initialized for {symbol}")
@@ -295,11 +501,11 @@ class CryptoAnalysisEngine:
         Returns:
             TradeSetup if valid signal found, None otherwise
         """
-        # Use pair config defaults
+        # Use pair config defaults, then analysis_config defaults
         if atr_multiplier_sl is None:
-            atr_multiplier_sl = getattr(self.pair_config, 'atr_sl_multiplier', 2.5)
+            atr_multiplier_sl = getattr(self.pair_config, 'atr_sl_multiplier', None) or getattr(self, '_default_atr_sl', 2.5)
         if rr_target is None:
-            rr_target = getattr(self.pair_config, 'rr_target', 2.0)
+            rr_target = getattr(self.pair_config, 'rr_target', None) or getattr(self, '_default_rr', 2.0)
 
         if len(df) < 50:
             return None
