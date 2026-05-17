@@ -43,7 +43,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from typing import Optional, List, Dict
 from enum import Enum
 from pathlib import Path
@@ -543,18 +543,34 @@ class ChastiefollCrypto:
             try:
                 insight = await self._llm_review_signal(signal_info, setup, position)
                 if not insight:
-                    # False = auto-approved (LLM unavailable/timeout)
-                    llm_reason = "auto-approved (LLM unavailable)"
+                    # None = LLM unavailable/timeout/rejected — SKIP execution
+                    log.info(f"    ⏸ LLM unavailable for {symbol} — skipping execution (LLM required)")
+                    return False
+                elif not (is_dataclass(insight) and hasattr(insight, 'trade_recommendation')):
+                    # Not a MarketInsight dataclass — skip execution
+                    log.warning(f"    ⏸ LLM returned unexpected type ({type(insight).__name__}) — skipping execution")
+                    return False
                 elif insight.trade_recommendation.upper() == "HOLD":
                     # HOLD = rejected
-                    log.info(f"    ✗ LLM rejected signal for {symbol} — skipping execution")
+                    log.info(f"    ✗ LLM REJECTED: {symbol} | Reason: {insight.summary[:120]}")
+                    # Save rejection as a lesson
+                    if self.lessons:
+                        self.lessons.add_lesson(
+                            lesson=f"LLM rejected {setup.signal.value} {symbol}: {insight.summary[:150]}",
+                            role="SCREENER",
+                            source="agent",
+                            context=f"Rejected at confidence {setup.confidence*100:.0f}%",
+                            symbol=symbol,
+                            confidence=0.6,
+                        )
                     return False
                 else:
                     # Approved — store the reason
-                    llm_reason = insight.summary if insight.summary else "AI approved"
+                    llm_reason = insight.summary if (insight and insight.summary) else "AI approved"
+                    log.info(f"    🧠 LLM APPROVED: {symbol} | Reason: {llm_reason[:120]}")
             except Exception as e:
-                log.warning(f"    ⚠ LLM review failed ({e}) — proceeding without review")
-                llm_reason = "auto-approved (LLM error)"
+                log.warning(f"    ⏸ LLM review failed ({e}) — skipping execution (LLM required)")
+                return False
 
         # Execute order
         side = "buy" if setup.signal.value == "BUY" else "sell"
@@ -760,15 +776,16 @@ class ChastiefollCrypto:
         # Run LLM analysis with timeout
         try:
             insight = await asyncio.wait_for(
-                self.llm_agent.analyze(query=query, role="SCREENER"),
-                timeout=15.0,  # Max 15 seconds for LLM review
+                self.llm_agent.analyze(query=query, role="SCREENER", skip_tools=True),
+                timeout=120.0,  # 120 seconds — MiniMax-M2.7 slow, needs time to think
             )
         except asyncio.TimeoutError:
-            log.warning(f"    ⚠ LLM review timed out for {symbol} — auto-approving")
-            return False  # False = auto-approve on timeout
+            log.warning(f"    ⏸ LLM review timed out for {symbol} — skipping execution (LLM required)")
+            return None  # None = caller will skip execution
 
         if not insight:
-            return False  # Failed to get insight = auto-approve (caller handles False)
+            log.warning(f"    ⏸ LLM returned no insight for {symbol} — skipping execution")
+            return None  # None = caller will skip execution
 
         # Check LLM recommendation
         recommendation = insight.trade_recommendation.upper()
@@ -785,12 +802,12 @@ class ChastiefollCrypto:
                     symbol=symbol,
                     confidence=0.6,
                 )
-            return False
+            return None  # None = rejected (caller will skip execution)
         
         # Approved
         log.info(f"    🧠 LLM APPROVED: {symbol} {setup.signal.value} | "
                  f"AI Confidence: {insight.confidence*100:.0f}%")
-        return True
+        return insight  # Return the insight object so caller has .summary
 
     async def _record_and_learn(
         self,

@@ -21,6 +21,7 @@ Capabilities:
 """
 
 import json
+import re
 import logging
 import asyncio
 import os
@@ -446,8 +447,9 @@ class LLMClient:
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def init(self):
+        timeout_env = int(os.getenv("LLM_TIMEOUT", "120"))
         self._session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+            timeout=aiohttp.ClientTimeout(total=timeout_env)
         )
 
     async def close(self):
@@ -719,7 +721,7 @@ class LLMInsightAgent:
     # Main Analysis
     # ──────────────────────────────────────────
 
-    async def analyze(self, query: str = None, role: str = None) -> MarketInsight:
+    async def analyze(self, query: str = None, role: str = None, skip_tools: bool = False) -> MarketInsight:
         """
         Run ReAct reasoning loop to generate market insight.
         Returns a structured MarketInsight object.
@@ -772,6 +774,28 @@ class LLMInsightAgent:
 
         self._react_history = []
 
+        # ── Fast path: single-shot (no tools, no ReAct loop) ──
+        if skip_tools:
+            response = await self.client.chat(messages)
+            if response:
+                # Try Final Answer format first, then strip thinking + parse JSON
+                if "Final Answer:" in response:
+                    return self._parse_final_answer(response)
+
+                # Strip thinking tags and try direct JSON parse
+                # Strip thinking tags — support BOTH Chinese （） and HTML 
+                clean = re.sub(r'<think>[\s\S]*?', '', response, count=0)
+                clean = re.sub(r'<think>[\s\S]*?）', '', clean, count=0)
+
+                result = self._parse_json_insight(clean)
+                if result.trade_recommendation in ("BUY", "SELL", "HOLD"):
+                    log.info(f"[LLM] Direct JSON → {result.trade_recommendation}: {result.summary[:80]}")
+                    return result
+
+                # Last resort: extract BUY/SELL/HOLD and reasoning from thinking
+                return self._extract_from_thinking(response)
+            return MarketInsight(summary="LLM call failed — no response.", bias="NEUTRAL", trade_recommendation="HOLD")
+
         # ReAct Loop
         for step in range(1, self.config.max_react_steps + 1):
             response = await self.client.chat(messages)
@@ -789,7 +813,7 @@ class LLMInsightAgent:
             react_step = self._parse_react_step(response, step)
             self._react_history.append(react_step)
 
-            if react_step.action and react_step.action in self.tools:
+            if react_step.action and react_step.action in self.tools and not skip_tools:
                 # Execute tool
                 observation = await self.tools[react_step.action].execute(
                     react_step.action_input
@@ -892,15 +916,26 @@ Respond ONLY with valid JSON."""
         return self._parse_json_insight(json_str)
 
     def _parse_json_insight(self, text: str) -> MarketInsight:
-        """Parse JSON string into MarketInsight."""
-        # Try to extract JSON from text
+        """Parse JSON string into MarketInsight. Handles thinking tags and partial responses."""
+        # ── Step 1: Strip thinking tags ──
+        # Remove thinking tags and their content (multi-line)
+# Support both Chinese-style （） and HTML-style 
+        # Use count=0 to strip ALL occurrences (not just first)
+        text = re.sub(r'<think>[\s\S]*?', '', text, count=0)
+        text = re.sub(r'<think>[\s\S]*?）', '', text, count=0)
+        text = text.strip()
+
         json_str = text.strip()
 
         # Handle markdown code blocks
         if "```json" in json_str:
             json_str = json_str.split("```json")[-1].split("```")[0].strip()
         elif "```" in json_str:
-            json_str = json_str.split("```")[1].split("```")[0].strip()
+            parts = json_str.split("```")
+            for part in parts:
+                if "trade_recommendation" in part or "summary" in part:
+                    json_str = part.strip()
+                    break
 
         # Find JSON object boundaries
         start = json_str.find("{")
@@ -933,6 +968,72 @@ Respond ONLY with valid JSON."""
                 trade_recommendation="HOLD",
                 raw_response=text,
             )
+
+    def _extract_from_thinking(self, text: str) -> MarketInsight:
+        """
+        Last-resort parser: extract BUY/SELL/HOLD and reasoning from raw thinking text.
+        Used when LLM doesn't output proper JSON.
+        """
+        text_lower = text.lower()
+
+        # Remove thinking tags first
+        # Remove thinking tags — support BOTH Chinese （） and HTML 
+        clean = re.sub(r'<think>[\s\S]*?', '', text, count=0)
+        clean = re.sub(r'<think>[\s\S]*?）', '', clean, count=0)
+        text_lower = clean.lower()
+
+        # Find recommendation - look in the clean text
+        recommendation = "HOLD"
+        reason_snippet = ""
+
+        # Look for Final Answer section
+        if "final answer:" in text_lower:
+            fa_part = clean.split("final answer:")[-1][:300]
+            if '"trade_recommendation"' in fa_part:
+                match = re.search(r'"trade_recommendation"\s*:\s*"(\w+)"', fa_part)
+                if match:
+                    recommendation = match.group(1).upper()
+            elif any(w in fa_part for w in ["buy", "sell"]):
+                # Look for positive indicators
+                for word in ["buy", "sell"]:
+                    idx = fa_part.find(word)
+                    if idx > 0 and "not" not in fa_part[max(0, idx-10):idx]:
+                        recommendation = word.upper()
+                        break
+            # Extract reason from Final Answer paragraph
+            lines = [l.strip() for l in fa_part.split("\n") if l.strip()][:5]
+            reason_snippet = " ".join(lines)[:200]
+        else:
+            # Look for recommendation keywords in the thinking
+            for word in ["buy", "sell", "hold", "approve", "reject", "signal"]:
+                matches = [(m.start(), m.group()) for m in re.finditer(rf'\b{word}\b', text_lower)]
+                for _, match in matches:
+                    # Get context around the match
+                    idx = text_lower.find(match)
+                    context = text[max(0, idx-20):idx+80]
+                    if "not" not in context.lower().split(word)[0][-20:]:
+                        if match in ["buy", "sell"]:
+                            recommendation = match.upper()
+                        reason_snippet = context.strip()[:150]
+                        break
+                if reason_snippet:
+                    break
+
+        # Determine bias
+        bias = "NEUTRAL"
+        if "bullish" in text_lower or "buy" in text_lower:
+            bias = "BULLISH"
+        elif "bearish" in text_lower or "sell" in text_lower:
+            bias = "BEARISH"
+
+        log.warning(f"[LLM] Extracted from thinking → {recommendation}: {reason_snippet[:80]}")
+        return MarketInsight(
+            summary=reason_snippet[:300] if reason_snippet else f"Signal {recommendation}",
+            bias=bias,
+            confidence=0.6,
+            trade_recommendation=recommendation,
+            raw_response=text,
+        )
 
     # ──────────────────────────────────────────
     # Status

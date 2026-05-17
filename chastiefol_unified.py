@@ -56,11 +56,14 @@ sys.path.insert(0, str(PROJECT_ROOT / "Session Filter" / "Agent"))
 from dotenv import load_dotenv
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+log_handler = logging.FileHandler("/tmp/chastiefol_unified.log")
+log_handler.setLevel(logging.INFO)
+log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+
+root = logging.getLogger()
+root.setLevel(logging.INFO)
+root.addHandler(log_handler)
+
 log = logging.getLogger("Chastiefol.Unified")
 
 

@@ -600,6 +600,27 @@ class CryptoAnalysisEngine:
         if rr < self.MINIMUM_RR:
             return None
 
+        symbol = self.pair_config.symbol if self.pair_config else "CRYPTO"
+        decimals = getattr(self.pair_config, 'price_decimals', 2)
+
+        # ── Sanity check: SL must be ≠ entry, TP must be ≠ SL after rounding ──
+        # Rounding to price_decimals can collapse SL/TP into entry when price is low
+        # (e.g. LDO @ $0.36, sl_distance=0.001 → SL=0.359 → round(0.359,2)=0.36=entry)
+        rounded_sl = round(stop_loss, decimals)
+        rounded_tp = round(take_profit, decimals)
+        if rounded_sl == entry or rounded_tp == entry or rounded_sl == rounded_tp:
+            log.warning(f"  ⚠ SL/TP collision after rounding for {symbol} "
+                        f"(entry={entry}, SL={rounded_sl}, TP={rounded_tp}) — adjusting")
+            # Use entry as TP and add 1-pip buffer to SL
+            if direction == Signal.BUY:
+                # SL below entry, TP above entry with buffer
+                stop_loss = round(entry - sl_distance - (sl_distance * 0.1), decimals)
+                take_profit = round(entry + max(sl_distance * 0.5, 0.0001), decimals)
+            else:
+                stop_loss = round(entry + sl_distance + (sl_distance * 0.1), decimals)
+                take_profit = round(entry - max(sl_distance * 0.5, 0.0001), decimals)
+            rr = abs(take_profit - entry) / abs(stop_loss - entry) if abs(stop_loss - entry) > 0 else 0
+
         # Add volatility context to reasons
         vol_pctl = self.ti.volatility_percentile(df["close"])
         if vol_pctl > 80:
