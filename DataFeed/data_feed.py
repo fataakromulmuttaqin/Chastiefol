@@ -37,6 +37,8 @@ from .tradingview_ws import (
     TVBar,
 )
 
+from Common.health import HealthStatus, default_registry
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
@@ -165,6 +167,11 @@ class DataFeedManager:
         self._initialized = False
         self._on_tick_callbacks: List[Callable] = []
 
+        # Health reporting — surfaced via /health so operators can see
+        # whether the live feed is dead and we're trading on stale data.
+        self._health = default_registry()
+        self._health.register("datafeed")
+
         log.info(f"DataFeedManager initialized | "
                  f"Symbol: {self.config.symbol} | "
                  f"Provider: TradingView WS (FREE) | "
@@ -263,6 +270,9 @@ class DataFeedManager:
                 )
                 self._quote_cache = quote
                 self._quote_cache_time = time.time()
+                self._health.report(
+                    "datafeed", HealthStatus.HEALTHY, detail="TradingView WS live",
+                )
                 return quote
 
         # CCXT fallback (PAXG/USDT as gold proxy)
@@ -281,6 +291,12 @@ class DataFeedManager:
                     )
                     self._quote_cache = quote
                     self._quote_cache_time = time.time()
+                    # Live, but on the proxy — that's a degraded mode.
+                    self._health.report(
+                        "datafeed",
+                        HealthStatus.DEGRADED,
+                        detail="primary down, using CCXT PAXG/USDT proxy",
+                    )
                     return quote
             except Exception as e:
                 # CCXT fallback failed — log so operators can spot rate-limits
@@ -299,6 +315,18 @@ class DataFeedManager:
             log.warning(
                 "[DataFeed] All providers failed — returning stale quote (age=%.1fs)",
                 age,
+            )
+            self._health.report(
+                "datafeed",
+                HealthStatus.UNHEALTHY,
+                detail=f"all providers down; serving stale cache (age={age:.1f}s)",
+                stale_age_seconds=round(age, 1),
+            )
+        else:
+            self._health.report(
+                "datafeed",
+                HealthStatus.UNHEALTHY,
+                detail="all providers down; no cached quote",
             )
         return self._quote_cache
 

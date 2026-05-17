@@ -6,5 +6,19 @@ structured logging adapters, and so on.
 """
 
 from .circuit_breaker import CircuitBreaker, CircuitBreakerOpen, CircuitState
+from .health import (
+    ComponentHealth,
+    HealthRegistry,
+    HealthStatus,
+    default_registry,
+)
 
-__all__ = ["CircuitBreaker", "CircuitBreakerOpen", "CircuitState"]
+__all__ = [
+    "CircuitBreaker",
+    "CircuitBreakerOpen",
+    "CircuitState",
+    "ComponentHealth",
+    "HealthRegistry",
+    "HealthStatus",
+    "default_registry",
+]

@@ -35,6 +35,7 @@ from abc import ABC, abstractmethod
 import aiohttp
 
 from Common.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from Common.health import HealthStatus, default_registry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -470,6 +471,11 @@ class LLMClient:
             failure_threshold=int(os.getenv("LLM_BREAKER_THRESHOLD", "5")),
             recovery_timeout=float(os.getenv("LLM_BREAKER_COOLDOWN", "60")),
         )
+        # Health reporting: register a "llm" component so /health shows
+        # this provider explicitly even before the first call.
+        self._health = default_registry()
+        self._health_component = f"llm:{config.provider.value}"
+        self._health.register(self._health_component)
 
     async def init(self):
         timeout_env = int(os.getenv("LLM_TIMEOUT", "120"))
@@ -507,12 +513,34 @@ class LLMClient:
             return result
 
         try:
-            return await self._breaker.call(_do_call)
+            result = await self._breaker.call(_do_call)
+            self._health.report(
+                self._health_component,
+                HealthStatus.HEALTHY,
+                detail=f"breaker={self._breaker.state.value}",
+            )
+            return result
         except CircuitBreakerOpen as e:
             log.debug("Skipping LLM call: %s", e)
+            self._health.report(
+                self._health_component,
+                HealthStatus.UNHEALTHY,
+                detail=str(e),
+                breaker=self._breaker.state.value,
+            )
             return ""
         except _LLMCallFailed:
             # Already logged by _post_with_retry; just propagate the empty.
+            self._health.report(
+                self._health_component,
+                # If the breaker tripped we surface UNHEALTHY; otherwise
+                # this is a single-call failure -> DEGRADED.
+                HealthStatus.UNHEALTHY
+                if self._breaker.state.value != "closed"
+                else HealthStatus.DEGRADED,
+                detail="LLM call failed",
+                breaker=self._breaker.state.value,
+            )
             return ""
 
     # ── Shared retry helper ──────────────────────────────────────

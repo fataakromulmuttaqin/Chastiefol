@@ -16,6 +16,8 @@ from enum import Enum
 
 from aiohttp import web
 
+from Common.health import HealthRegistry, HealthStatus, default_registry
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
@@ -81,15 +83,28 @@ class WebhookListener:
     - Signal queue for downstream processing
     """
 
-    def __init__(self, config: WebhookConfig = None, on_signal: Optional[Callable] = None):
+    def __init__(
+        self,
+        config: WebhookConfig = None,
+        on_signal: Optional[Callable] = None,
+        health_registry: Optional[HealthRegistry] = None,
+    ):
         self.config = config or WebhookConfig()
         self.on_signal = on_signal  # Callback when valid signal received
+        # Health registry — defaults to the process-wide singleton so any
+        # subsystem that imports `default_registry()` reports into the
+        # same map this listener exposes via /health. Tests can pass a
+        # fresh HealthRegistry to isolate state.
+        self.health = health_registry or default_registry()
         self.signal_queue: asyncio.Queue = asyncio.Queue()
         self.signal_history: List[dict] = []
         self._request_timestamps: List[float] = []
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
         self._is_running = False
+
+        # Pre-register self so /health shows "webhook" before first signal.
+        self.health.register("webhook")
 
         log.info(f"WebhookListener initialized | Port: {self.config.port} | "
                  f"HMAC Auth: {self.config.enable_hmac_auth} | "
@@ -112,9 +127,15 @@ class WebhookListener:
         site = web.TCPSite(self._runner, self.config.host, self.config.port)
         await site.start()
         self._is_running = True
+        # Mark ourselves healthy now that the listener is accepting connections.
+        self.health.report(
+            "webhook",
+            HealthStatus.HEALTHY,
+            detail=f"listening on {self.config.host}:{self.config.port}",
+        )
         log.info(f"Webhook server started on http://{self.config.host}:{self.config.port}")
         log.info(f"  POST /webhook  — Receive TradingView signals")
-        log.info(f"  GET  /health   — Health check")
+        log.info(f"  GET  /health   — Health check (per-component status)")
         log.info(f"  GET  /signals  — Recent signal history")
         log.info(f"  GET  /status   — Server status")
 
@@ -230,15 +251,27 @@ class WebhookListener:
         }, status=200)
 
     async def _handle_health(self, request: web.Request) -> web.Response:
-        """Health check endpoint."""
-        return web.json_response({
-            "status": "healthy",
+        """Health check endpoint.
+
+        Returns the registry snapshot so external monitors (uptime checks,
+        Telegram alert daemons, k8s probes) can see *which* subsystem is
+        unhealthy rather than just a binary up/down. HTTP status is set
+        to 200 for healthy/unknown and 503 for degraded/unhealthy so
+        load balancers can route around a sick instance.
+        """
+        registry_snapshot = self.health.snapshot()
+        overall = registry_snapshot["status"]
+        http_status = 200 if overall in ("healthy", "unknown") else 503
+        body = {
+            "status": overall,
             "service": "chastiefol-webhook",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "uptime": self._is_running,
             "queue_size": self.signal_queue.qsize(),
             "signals_received": len(self.signal_history),
-        })
+            "components": registry_snapshot["components"],
+        }
+        return web.json_response(body, status=http_status)
 
     async def _handle_signals(self, request: web.Request) -> web.Response:
         """Return recent signal history."""
