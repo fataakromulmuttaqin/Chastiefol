@@ -587,6 +587,17 @@ class ChastiefollCrypto:
             log.info(f"    ✓ EXECUTED: {side.upper()} {adjusted_amount} {symbol} "
                      f"@ ${order_result.average_price or setup.entry:,.2f}")
 
+            # ── Register trade in risk manager ─────────────────────────────────
+            self.risk_manager.open_trade(
+                symbol=symbol,
+                side=side,
+                amount=adjusted_amount,
+                entry_price=order_result.average_price or setup.entry,
+                stop_loss=setup.stop_loss,
+                take_profit=setup.take_profit,
+                category=pair_config.category.value if hasattr(pair_config, 'category') else "",
+            )
+
             await self._notify_trade(setup, position, order_result, llm_reason)
             return True
         else:
@@ -677,30 +688,49 @@ class ChastiefollCrypto:
         except Exception:
             pass
 
-    async def _notify_trade(self, setup, position, order_result, llm_reason=""):
-        """Send trade execution notification with LLM approval reason."""
-        if not self.telegram:
-            return
-        try:
-            msg = (
-                f"✅ *TRADE EXECUTED*\n"
-                f"{'🟢' if setup.signal.value == 'BUY' else '🔴'} "
-                f"*{setup.signal.value} {setup.symbol}*\n\n"
-                f"Filled: `{order_result.filled}` @ `${order_result.average_price:,.2f}`\n"
-                f"SL: `${setup.stop_loss:,.2f}`\n"
-                f"TP: `${setup.take_profit:,.2f}`\n"
-                f"Cost: `${order_result.cost:,.2f}`"
+def _fmt_price(price: float) -> str:
+    """Format price with appropriate decimal places based on magnitude."""
+    if price is None or (isinstance(price, float) and price <= 0):
+        return "—"
+    abs_p = abs(price)
+    if abs_p >= 100:
+        decimals = 2
+    elif abs_p >= 1:
+        decimals = 4
+    elif abs_p >= 0.01:
+        decimals = 6
+    else:
+        decimals = 8
+    return f"${price:,.{decimals}f}"
+
+
+async def _notify_trade(self, setup, position, order_result, llm_reason=""):
+    """Send trade execution notification with LLM approval reason."""
+    if not self.telegram:
+        return
+    try:
+        avg = order_result.average_price if order_result.average_price else setup.entry
+        filled = getattr(order_result, "filled", 0)
+        cost = getattr(order_result, "cost", 0)
+        msg = (
+            f"✅ *TRADE EXECUTED*\n"
+            f"{'🟢' if setup.signal.value == 'BUY' else '🔴'} "
+            f"*{setup.signal.value} {setup.symbol}*\n\n"
+            f"Filled: `{filled}` @ {avg}\n"
+            f"SL: {setup.stop_loss}\n"
+            f"TP: {setup.take_profit}\n"
+            f"Cost: {cost}"
+        )
+        if llm_reason:
+            reason_short = llm_reason[:180].replace("\n", " ")
+            msg += (
+                f"\n\n┌─ *AI APPROVAL REASON* ──────┐\n"
+                f"│ 💡 {reason_short}\n"
+                f"└────────────────────────────┘"
             )
-            if llm_reason:
-                reason_short = llm_reason[:180].replace("\n", " ")
-                msg += (
-                    f"\n\n┌─ *AI APPROVAL REASON* ──────┐\n"
-                    f"│ 💡 {reason_short}\n"
-                    f"└────────────────────────────┘"
-                )
-            await self.telegram.send_message(msg)
-        except Exception:
-            pass
+        await self.telegram.send_message(msg)
+    except Exception:
+        pass
 
     async def _notify_close(self, symbol, pnl, reason):
         """Send trade close notification."""
@@ -711,8 +741,8 @@ class ChastiefollCrypto:
             msg = (
                 f"{emoji} *TRADE CLOSED*\n"
                 f"*{symbol}* — {reason}\n"
-                f"P&L: `${pnl:+,.2f}`\n"
-                f"Balance: `${self.risk_manager.account.balance:,.2f}`"
+                f"P&L: `{pnl:+,.2f}`\n"
+                f"Balance: `{self.risk_manager.account.balance:,.2f}`"
             )
             await self.telegram.send_message(msg)
         except Exception:
